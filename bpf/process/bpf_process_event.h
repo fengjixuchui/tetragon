@@ -65,10 +65,10 @@ get_parent_auid(struct task_struct *t)
 
 #define offsetof_btf(s, memb) ((size_t)((char *)_(&((s *)0)->memb) - (char *)0))
 
-#define container_of_btf(ptr, type, member)                                    \
-	({                                                                     \
-		void *__mptr = (void *)(ptr);                                  \
-		((type *)(__mptr - offsetof_btf(type, member)));               \
+#define container_of_btf(ptr, type, member)                      \
+	({                                                       \
+		void *__mptr = (void *)(ptr);                    \
+		((type *)(__mptr - offsetof_btf(type, member))); \
 	})
 
 static inline __attribute__((always_inline)) struct mount *
@@ -137,7 +137,8 @@ prepend_name(char *bf, char **buffer, int *buflen, const char *name, u32 dlen)
 	// This ensures that dlen is < 256, which is aligned with kernel's max dentry name length
 	// that is 255 (https://elixir.bootlin.com/linux/v5.10/source/include/uapi/linux/limits.h#L12).
 	// Needed to bound that for probe_read call.
-	asm volatile("%[dlen] &= 0xff;\n" ::[dlen] "+r"(dlen) :);
+	asm volatile("%[dlen] &= 0xff;\n" ::[dlen] "+r"(dlen)
+		     :);
 	probe_read(bf + buffer_offset + 1, dlen * sizeof(char), name);
 
 	*buffer = bf + buffer_offset;
@@ -382,8 +383,10 @@ getcwd(struct msg_process *curr, __u32 offset, __u32 proc_pid, bool prealloc)
 	if (!buffer)
 		return 0;
 
-	asm volatile("%[offset] &= 0x3ff;\n" ::[offset] "+r"(offset) :);
-	asm volatile("%[size] &= 0xff;\n" ::[size] "+r"(size) :);
+	asm volatile("%[offset] &= 0x3ff;\n" ::[offset] "+r"(offset)
+		     :);
+	asm volatile("%[size] &= 0xff;\n" ::[size] "+r"(size)
+		     :);
 	probe_read((char *)curr + offset, size, buffer);
 
 	offset += size;
@@ -402,75 +405,6 @@ getcwd(struct msg_process *curr, __u32 offset, __u32 proc_pid, bool prealloc)
 	if (prealloc)
 		curr->size = orig_size;
 	return 0;
-}
-
-#define PROBE_ARG_HEADER "%[index] = 0;"
-
-#define PROBE_ARG_READ5                                                        \
-	PROBE_ARG_READ                                                         \
-	PROBE_ARG_READ                                                         \
-	PROBE_ARG_READ                                                         \
-	PROBE_ARG_READ                                                         \
-	PROBE_ARG_READ
-
-#define PROBE_ARG_READ10                                                       \
-	PROBE_ARG_READ5                                                        \
-	PROBE_ARG_READ5
-
-#define PROBE_ARG_READ50                                                       \
-	PROBE_ARG_READ10                                                       \
-	PROBE_ARG_READ10                                                       \
-	PROBE_ARG_READ10                                                       \
-	PROBE_ARG_READ10                                                       \
-	PROBE_ARG_READ10
-
-#define PROBE_ARG_READ                                                         \
-	"r3 = *(u64 *)%[args];"                                                \
-	"r3 += %[offset];"                                                     \
-	"r4 = *(u64 *)%[end];"                                                 \
-	"if r4 <= r3 goto %l[c];"                                              \
-	"r4 = *(u32 *)(%[curr] + 0);"                                          \
-	"if r4 s< 0 goto %l[a];"                                               \
-	"if r4 s> " XSTR(                                                      \
-		BUFFER) " goto %l[b];"                                         \
-			"r1 = *(u64 *)%[earg];"                                \
-			"r1 += r4;"                                            \
-			"r2 = " XSTR(                                          \
-				MAXARGLENGTH) ";"                              \
-					      "call 45;"                       \
-					      "if r0 s< 0 goto %l[a];"         \
-					      "%[offset] += r0;"               \
-					      "r4 = *(u32 *)(%[curr] + 0);"    \
-					      "r0 += r4;"                      \
-					      "*(u32 *)(%[curr] + 0) = r0;"
-
-/* To ensure reading args will work across multiple kernels and pass verifier we
- * code it as an asm block to make it friendly for verifiers. Otherwise, the C
- * code became far too fragile and even small refactors had potential to break
- * some kernel version with whatever set of fixes that kernel has. Not everyone
- * is even using LTS kernels so we get kernels with verifier in strange states.
- * I'm looking at you 4.15 kernel running in minikube!
- */
-static inline __attribute__((always_inline)) void
-probe_arg_read(struct msg_process *c, char *earg, char *args, char *end_args)
-{
-	long off = 0;
-
-	asm volatile goto(
-		PROBE_ARG_READ50
-		:
-		: [earg] "m"(earg), [args] "m"(args), [end] "m"(end_args),
-		  [curr] "ri"(c), [offset] "r"(off)
-		: "r0", "r1", "r2", "r3", "r4", "r5"
-		: a, b, c);
-	c->flags |= EVENT_TRUNC_ARGS;
-c:
-	return;
-b:
-	c->flags |= EVENT_TRUNC_ARGS;
-	return;
-a:
-	c->flags |= EVENT_ERROR_ARGS;
 }
 
 static inline __attribute__((always_inline)) void
@@ -580,22 +514,6 @@ get_namespaces(struct msg_ns *msg, struct task_struct *task)
 	}
 }
 
-/* Gather Cgroup id using current task context */
-static inline __attribute__((always_inline)) void
-__event_get_current_cgroup_id(struct msg_execve_event *msg, struct cgroup *cgrp)
-{
-	/* Try the bpf helper on the default hierarchy */
-#ifdef BPF_FUNC_get_current_cgroup_id
-	msg->kube.cgrpid = get_current_cgroup_id();
-#endif
-
-	/* Fallback on the passed cgroup which should point to the
-	 * right hierarchy.
-	 */
-	if (!msg->kube.cgrpid)
-		msg->kube.cgrpid = get_cgroup_id(cgrp);
-}
-
 /* Gather Cgroup name using current task context */
 static inline __attribute__((always_inline)) void
 __event_get_current_cgroup_name(struct msg_execve_event *msg,
@@ -608,7 +526,7 @@ __event_get_current_cgroup_name(struct msg_execve_event *msg,
 	if (name)
 		probe_read_str(msg->kube.docker_id, KN_NAME_LENGTH, name);
 	else
-		process->flags |= EVENT_DOCKER_NAME_ERR;
+		process->flags |= EVENT_ERROR_CGROUP_NAME;
 }
 
 /**
@@ -627,22 +545,31 @@ __event_get_cgroup_info(struct msg_execve_event *msg,
 {
 	struct cgroup *cgrp;
 	int zero = 0, subsys_idx = 0;
+	__u64 cgrpfs_magic = 0;
 	struct tetragon_conf *conf;
+
+	/* Clear cgroup info at the beginning, so if we return early we do not pass previous data */
+	memset(&msg->kube, 0, sizeof(struct msg_k8s));
 
 	/* Check if cgroup configuration is set */
 	conf = map_lookup_elem(&tg_conf_map, &zero);
 	/* Select the right css to use */
-	if (conf && conf->tg_cgrp_subsys_idx != 0)
-		subsys_idx = conf->tg_cgrp_subsys_idx;
-
-	cgrp = get_task_cgroup(task, subsys_idx);
-	if (!cgrp) {
-		process->flags |= EVENT_DOCKER_SUBSYSCGRP_ERR;
-		return;
+	if (conf) {
+		if (conf->tg_cgrp_subsys_idx != 0)
+			subsys_idx = conf->tg_cgrp_subsys_idx;
+		cgrpfs_magic = conf->cgrp_fs_magic;
 	}
 
+	cgrp = get_task_cgroup(task, subsys_idx, &process->flags);
+	if (!cgrp)
+		return;
+
 	/* Collect event cgroup ID */
-	__event_get_current_cgroup_id(msg, cgrp);
+	msg->kube.cgrpid = tg_get_current_cgroup_id(cgrp, cgrpfs_magic);
+	if (!msg->kube.cgrpid) {
+		process->flags |= EVENT_ERROR_CGROUP_ID;
+		/* Continue and gather remaining info */
+	}
 
 	/* Get the event cgroup name now */
 	__event_get_current_cgroup_name(msg, process, cgrp);

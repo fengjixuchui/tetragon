@@ -5,7 +5,7 @@ GO_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)'"
 GO_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -linkmode external -extldflags -static"
 GO_OPERATOR_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -s -w"
 
-GOLANGCILINT_WANT_VERSION = 1.45.2
+GOLANGCILINT_WANT_VERSION = 1.50.1
 GOLANGCILINT_VERSION = $(shell golangci-lint version 2>/dev/null)
 
 all: generate
@@ -32,6 +32,6 @@ generate:
 
 .PHONY: vendor
 vendor:
-	$(GO) mod tidy -compat=1.17
+	$(GO) mod tidy -compat=1.18
 	$(GO) mod vendor
 	$(GO) mod verify

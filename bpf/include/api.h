@@ -166,6 +166,8 @@ static int BPF_FUNC(skb_change_proto, struct __sk_buff *skb, uint32_t proto,
 		    uint32_t flags);
 static int BPF_FUNC(skb_change_tail, struct __sk_buff *skb, uint32_t nlen,
 		    uint32_t flags);
+static int BPF_FUNC(skb_adjust_room, struct __sk_buff *skb, int32_t len_diff,
+		    uint32_t mode, uint64_t flags);
 static int BPF_FUNC(skb_pull_data, struct __sk_buff *skb, uint32_t len);
 
 /* Packet vlan encap/decap */
@@ -205,13 +207,8 @@ static int BPF_FUNC(probe_read_kernel, void *dst, uint32_t size, const void *src
 
 static uint64_t BPF_FUNC(get_current_task);
 
-#ifdef BPF_FUNC_get_current_cgroup_id
 static uint64_t BPF_FUNC(get_current_cgroup_id);
-#endif
-
-#ifdef BPF_FUNC_get_current_ancestor_cgroup_id
 static uint64_t BPF_FUNC(get_current_ancestor_cgroup_id);
-#endif
 
 static uint64_t BPF_FUNC(get_current_uid_gid);
 static uint64_t BPF_FUNC(get_current_pid_tgid);

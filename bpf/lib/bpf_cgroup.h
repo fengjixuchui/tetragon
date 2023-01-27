@@ -7,6 +7,7 @@
 #include "hubble_msg.h"
 #include "bpf_helpers.h"
 #include "environ_conf.h"
+#include "bpf_helpers.h"
 
 #define NULL ((void *)0)
 
@@ -237,9 +238,12 @@ get_cgroup_id(const struct cgroup *cgrp)
  * @task: must be current task.
  * @subsys_idx: index of the desired cgroup_subsys_state part of css_set.
  *    Passing a zero as a subsys_idx is fine assuming you want that.
+ * @error_flags: error flags that will be ORed to indicate errors on
+ *   failures.
  *
  * Returns the cgroup of the css part of css_set of current task and is
- * indexed at subsys_idx on success, NULL on failures.
+ * indexed at subsys_idx on success. NULL on failures, and the error_flags
+ * will be ORed to indicate the corresponding error.
  *
  * To get cgroup and kernfs node information we want to operate on the right
  * cgroup hierarchy which is setup by user space. However due to the
@@ -253,15 +257,17 @@ get_cgroup_id(const struct cgroup *cgrp)
  * counting first comment line.
  */
 static inline __attribute__((always_inline)) struct cgroup *
-get_task_cgroup(struct task_struct *task, __u32 subsys_idx)
+get_task_cgroup(struct task_struct *task, __u32 subsys_idx, __u32 *error_flags)
 {
 	struct cgroup_subsys_state *subsys;
 	struct css_set *cgroups;
 	struct cgroup *cgrp = NULL;
 
 	probe_read(&cgroups, sizeof(cgroups), _(&task->cgroups));
-	if (unlikely(!cgroups))
+	if (unlikely(!cgroups)) {
+		*error_flags |= EVENT_ERROR_CGROUPS;
 		return cgrp;
+	}
 
 	/* We are interested only in the cpuset, memory or pids controllers
 	 * which are indexed at 0, 4 and 11 respectively assuming all controllers
@@ -279,8 +285,10 @@ get_task_cgroup(struct task_struct *task, __u32 subsys_idx)
 	 * especially if they happen to be before the desired subsys_idx,
 	 * we fail.
 	 */
-	if (unlikely(subsys_idx > pids_cgrp_id))
+	if (unlikely(subsys_idx > pids_cgrp_id)) {
+		*error_flags |= EVENT_ERROR_CGROUP_SUBSYS;
 		return cgrp;
+	}
 
 	/* Read css from the passed subsys index to ensure that we operate
 	 * on the desired controller. This allows user space to be flexible
@@ -289,11 +297,48 @@ get_task_cgroup(struct task_struct *task, __u32 subsys_idx)
 	 * in a significant way.
 	 */
 	probe_read(&subsys, sizeof(subsys), _(&cgroups->subsys[subsys_idx]));
-	if (unlikely(!subsys))
+	if (unlikely(!subsys)) {
+		*error_flags |= EVENT_ERROR_CGROUP_SUBSYS;
 		return cgrp;
+	}
 
 	probe_read(&cgrp, sizeof(cgrp), _(&subsys->cgroup));
+	if (!cgrp)
+		*error_flags |= EVENT_ERROR_CGROUP_SUBSYSCGRP;
+
 	return cgrp;
+}
+
+/**
+ * tg_get_current_cgroup_id() Returns the accurate cgroup id of current task.
+ * @cgrp: cgroup target of current task.
+ * @cgrpfs_ver: Cgroupfs Magic number either Cgroupv1 or Cgroupv2
+ *
+ * It handles both cgroupv2 and cgroupv1.
+ * If @cgrpfs_ver is default cgroupv2 hierarchy, then it uses the bpf
+ * helper bpf_get_current_cgroup_id() to retrieve the cgroup id. Otherwise
+ * it falls back on using the passed @cgrp
+ *
+ * Returns the cgroup id of current task on success, zero on failures.
+ */
+static inline __attribute__((always_inline)) __u64
+tg_get_current_cgroup_id(struct cgroup *cgrp, __u64 cgrpfs_ver)
+{
+	__u64 id = 0;
+
+	/*
+	 * Try the bpf helper on the default hierarchy if available
+	 * and if we are running in unified cgroupv2
+	 */
+	if (bpf_core_enum_value_exists(enum bpf_func_id,
+				       BPF_FUNC_get_current_cgroup_id) &&
+	    cgrpfs_ver == CGROUP2_SUPER_MAGIC) {
+		id = get_current_cgroup_id();
+	} else {
+		id = get_cgroup_id(cgrp);
+	}
+
+	return id;
 }
 
 /**

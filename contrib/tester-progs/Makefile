@@ -8,7 +8,9 @@ PROGS = sigkill-tester \
 	dup-tester \
 	trigger-test-events \
 	sigkill-unprivileged-user-ns-tester \
-	nop
+	nop \
+	exit-leader \
+	exit-tester
 
 all: $(PROGS)
 
@@ -18,8 +20,14 @@ all: $(PROGS)
 capabilities-tester: capabilities-tester.c
 	$(GCC) -Wall $< -o $@ -lcap
 
+exit-tester: exit-tester.c
+	$(GCC) -Wall $< -o $@ -lpthread
+
 sigkill-unprivileged-user-ns-tester: sigkill-unprivileged-user-ns-tester.c
 	$(GCC) -Wall $< -o $@ -lcap
+
+exit-leader: exit-leader.c
+	$(GCC) -Wall $< -o $@ -lpthread
 
 .PHONY: clean
 clean:

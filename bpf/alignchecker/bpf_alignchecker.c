@@ -15,11 +15,11 @@
  * We make the variable here pointer in order to fit all structs
  * even in this case object files contain all the required information
  */
-#define DECLARE(datatype, x, iter)                                             \
-	{                                                                      \
-		datatype x *s##iter = 0;                                       \
-		trace_printk("%p", 1, &s##iter);                               \
-		iter++;                                                        \
+#define DECLARE(datatype, x, iter)               \
+	{                                        \
+		datatype x *s##iter = 0;         \
+		trace_printk("%p", 1, &s##iter); \
+		iter++;                          \
 	}
 
 /* This function is a placeholder for C struct definitions shared with Go,
@@ -44,5 +44,6 @@ int main(void)
 	DECLARE(struct, tetragon_conf, iter);
 	DECLARE(struct, cgroup_tracking_value, iter);
 
-	return 0;
+	// avoid unused variable warning/error
+	return iter * 0;
 }

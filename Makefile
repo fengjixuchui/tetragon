@@ -1,4 +1,5 @@
 GO ?= go
+export TARGET_ARCH ?= amd64
 INSTALL = $(QUIET)install
 BINDIR ?= /usr/local/bin
 CONTAINER_ENGINE ?= docker
@@ -11,6 +12,9 @@ CLANG_IMAGE  = quay.io/cilium/clang:ca424d14eb4326ffc65fccd8049d8a7bfdd06607@sha
 TESTER_PROGS_DIR = "contrib/tester-progs"
 # Extra flags to pass to test binary
 EXTRA_TESTFLAGS ?=
+SUDO ?= sudo
+
+BUILD_PKG_DIR ?= $(shell pwd)/build/$(TARGET_ARCH)
 
 VERSION ?= $(shell git describe --tags --always)
 GO_GCFLAGS ?= ""
@@ -19,7 +23,7 @@ GO_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)'
 GO_OPERATOR_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -s -w"
 
 
-GOLANGCILINT_WANT_VERSION = 1.45.2
+GOLANGCILINT_WANT_VERSION = 1.50.1
 GOLANGCILINT_VERSION = $(shell golangci-lint version 2>/dev/null)
 
 
@@ -45,6 +49,9 @@ help:
 	@echo 'Container images:'
 	@echo '    image             - build the Tetragon agent container image'
 	@echo '    image-operator    - build the Tetragon operator container image'
+	@echo 'Packages:'
+	@echo '    tarball           - build Tetragon compressed tarball'
+	@echo '    tarball-release   - build Tetragon release tarball'
 	@echo 'Generated files:'
 	@echo '    codegen           - generate code based on .proto files'
 	@echo '    generate          - generate kubebuilder files'
@@ -76,7 +83,7 @@ tetragon-bpf-local:
 
 tetragon-bpf-container:
 	$(CONTAINER_ENGINE) rm tetragon-clang || true
-	$(CONTAINER_ENGINE) run -v $(CURDIR):/tetragon:Z -u $$(id -u) --name tetragon-clang $(CLANG_IMAGE) $(MAKE) -C /tetragon/bpf
+	$(CONTAINER_ENGINE) run -v $(CURDIR):/tetragon:Z -u $$(id -u) -e TARGET_ARCH=$(TARGET_ARCH) --name tetragon-clang $(CLANG_IMAGE) $(MAKE) -C /tetragon/bpf
 	$(CONTAINER_ENGINE) rm tetragon-clang
 
 .PHONY: verify
@@ -121,20 +128,20 @@ install:
 vendor:
 	$(MAKE) -C ./api vendor
 	$(MAKE) -C ./pkg/k8s vendor
-	$(GO) mod tidy -compat=1.17
+	$(GO) mod tidy -compat=1.18
 	$(GO) mod vendor
 	$(GO) mod verify
 
 .PHONY: clean
-clean: cli-clean
+clean: cli-clean tarball-clean
 	$(MAKE) -C ./bpf clean
 	rm -f go-tests/*.test ./ksyms ./tetragon ./tetragon-operator ./tetra ./tetragon-alignchecker
 	rm -f contrib/sigkill-tester/sigkill-tester contrib/namespace-tester/test_ns contrib/capabilities-tester/test_caps
 	$(MAKE) -C $(TESTER_PROGS_DIR) clean
 
 .PHONY: test
-test:
-	$(GO) test -p 1 -parallel 1 $(GOFLAGS) -gcflags=$(GO_GCFLAGS) -timeout 20m -failfast -cover ./pkg/... ${EXTRA_TESTFLAGS}
+test: tester-progs tetragon-bpf
+	$(SUDO) $(GO) test -p 1 -parallel 1 $(GOFLAGS) -gcflags=$(GO_GCFLAGS) -timeout 20m -failfast -cover ./pkg/... ./cmd/... ${EXTRA_TESTFLAGS}
 
 # Agent image to use for end-to-end tests
 E2E_AGENT ?= "cilium/tetragon:$(DOCKER_IMAGE_TAG)"
@@ -220,6 +227,28 @@ image-clang-arm:
 	# to compile bpf programs for arm, put 'docker.io/cilium/clang.arm:latest' to CLANG_IMAGE
 	$(CONTAINER_ENGINE) build -f Dockerfile.clang.arm -t "cilium/clang.arm:${DOCKER_IMAGE_TAG}" .
 
+.PHONY: tarball tarball-release tarball-clean
+# Share same build environment as docker image
+tarball: tarball-clean image
+	$(CONTAINER_ENGINE) build --build-arg TETRAGON_VERSION=$(VERSION) --build-arg TARGET_ARCH=$(TARGET_ARCH) -f Dockerfile.tarball -t "cilium/tetragon-tarball:${DOCKER_IMAGE_TAG}" .
+	$(QUIET)mkdir -p $(BUILD_PKG_DIR)
+	$(CONTAINER_ENGINE) save cilium/tetragon-tarball:$(DOCKER_IMAGE_TAG) -o $(BUILD_PKG_DIR)/tetragon-$(VERSION)-$(TARGET_ARCH).tmp.tar
+	$(QUIET)mkdir -p $(BUILD_PKG_DIR)/docker/
+	$(QUIET)mkdir -p $(BUILD_PKG_DIR)/linux-tarball/
+	tar xC $(BUILD_PKG_DIR)/docker/ -f $(BUILD_PKG_DIR)/tetragon-$(VERSION)-$(TARGET_ARCH).tmp.tar
+	find $(BUILD_PKG_DIR)/docker/ -name 'layer.tar' -exec cp '{}' $(BUILD_PKG_DIR)/linux-tarball/tetragon-$(VERSION)-$(TARGET_ARCH).tar \;
+	$(QUIET)rm -fr $(BUILD_PKG_DIR)/tetragon-$(VERSION)-$(TARGET_ARCH).tmp.tar
+	gzip -6 $(BUILD_PKG_DIR)/linux-tarball/tetragon-$(VERSION)-$(TARGET_ARCH).tar
+	@echo "Tetragon tarball is ready: $(BUILD_PKG_DIR)/linux-tarball/tetragon-$(VERSION)-$(TARGET_ARCH).tar.gz"
+
+tarball-release: tarball
+	mkdir -p release/
+	mv $(BUILD_PKG_DIR)/linux-tarball/tetragon-$(VERSION)-$(TARGET_ARCH).tar.gz release/
+	sha256sum release/tetragon-$(VERSION)-$(TARGET_ARCH).tar.gz > release/tetragon-$(VERSION)-$(TARGET_ARCH).tar.gz.sha256sum
+
+tarball-clean:
+	rm -fr $(BUILD_PKG_DIR)
+
 fetch-testdata:
 	wget -nc -P testdata/btf 'https://github.com/cilium/tetragon-testdata/raw/main/btf/vmlinux-5.4.104+'
 
@@ -264,7 +293,7 @@ endif
 
 .PHONY: go-format
 go-format:
-	find . -name '*.go' -not -path './vendor/*' -not -path './api/vendor/*' -not -path './pkg/k8s/vendor/*' | xargs gofmt -w
+	find . -name '*.go' -not -path './vendor/*' -not -path './api/vendor/*' -not -path './pkg/k8s/vendor/*' -not -path './api/v1/tetragon/codegen/*' | xargs gofmt -w
 
 .PHONY: format
 format: go-format clang-format

@@ -109,6 +109,7 @@ message ProcessExit {
     Process parent  = 2;
     string  signal  = 3;
     uint32  status  = 4;
+    google.protobuf.Timestamp time = 5;
 }
 
 message KprobeSock {
@@ -276,4 +277,11 @@ message HealthStatus {
 
 message GetHealthStatusResponse {
 	repeated HealthStatus health_status = 1;
+}
+
+// loader sensor event triggered for loaded binary/library
+message ProcessLoader {
+	Process process = 1;
+	string path = 2;
+	bytes buildid = 3;
 }

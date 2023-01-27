@@ -18,7 +18,7 @@ jobs:
         go-version: '1.18.3'
 
     - name: Checkout code
-      uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8
+      uses: actions/checkout@755da8c3cf115ac066823e79a1e1788f8940201b
       with:
         path: go/src/github.com/cilium/tetragon/
 
@@ -42,16 +42,15 @@ jobs:
     - name: Run go tests
       env:
         GOPATH: /home/runner/work/tetragon/tetragon/go
+        SUDO: sudo -E
       run: |
         cd go/src/github.com/cilium/tetragon/
         make check-copyright
-        sudo make tetragon-bpf
         sudo -E echo "run go tests: " `uname -a`
         sudo -E go mod verify
         sudo -E GO111MODULE=off go get -u golang.org/x/lint/golint
         export TETRAGON_LIB=$(realpath "bpf/objs/")
-        sudo -E make tester-progs
-        sudo -E make test
+        make test
 
     - name: Upload Tetragon logs
       if: failure()

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -21,6 +22,22 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
+// DocLong documents the commands with some examples
+const DocLong = `This command prints and filter events by connecting to the server or via
+redirection of events to the stdin. Examples:
+
+  # Connect, print and filter by process events
+  %[1]s getevents --process netserver
+
+  # Redirect events and filter by namespace from stdin
+  cat events.json | %[1]s getevents -o compact --namespace default
+
+  # Exclude parent field
+  %[1]s getevents -F parent
+
+  # Include only process and parent.pod fields
+  %[1]s getevents -f process,parent.pod`
+
 // GetEncoder returns an encoder for an event stream based on configuration options.
 var GetEncoder = func(w io.Writer, colorMode encoder.ColorMode, timestamps bool, compact bool) encoder.EventEncoder {
 	if compact {
@@ -29,7 +46,13 @@ var GetEncoder = func(w io.Writer, colorMode encoder.ColorMode, timestamps bool,
 	return json.NewEncoder(w)
 }
 
-func getRequest(includeFields, excludeFields []string, namespaces []string, host bool, processes []string, pods []string) *tetragon.GetEventsRequest {
+// GetFilter returns a filter for an event stream based on configuration options.
+var GetFilter = func() *tetragon.Filter {
+	host := viper.GetBool("host")
+	namespaces := viper.GetStringSlice("namespace")
+	processes := viper.GetStringSlice("process")
+	pods := viper.GetStringSlice("pod")
+
 	if host {
 		// Host events can be matched by an empty namespace string.
 		namespaces = append(namespaces, "")
@@ -49,6 +72,10 @@ func getRequest(includeFields, excludeFields []string, namespaces []string, host
 		filter.PodRegex = pods
 	}
 
+	return &filter
+}
+
+func getRequest(includeFields, excludeFields []string, filter *tetragon.Filter) *tetragon.GetEventsRequest {
 	var fieldFilters []*tetragon.FieldFilter
 	if len(includeFields) > 0 {
 		fieldFilters = append(fieldFilters, &tetragon.FieldFilter{
@@ -71,22 +98,18 @@ func getRequest(includeFields, excludeFields []string, namespaces []string, host
 
 	return &tetragon.GetEventsRequest{
 		FieldFilters: fieldFilters,
-		AllowList:    []*tetragon.Filter{&filter},
+		AllowList:    []*tetragon.Filter{filter},
 	}
 }
 
 func getEvents(ctx context.Context, client tetragon.FineGuidanceSensorsClient) {
-	host := viper.GetBool("host")
-	namespaces := viper.GetStringSlice("namespace")
-	processes := viper.GetStringSlice("process")
-	pods := viper.GetStringSlice("pod")
 	timestamps := viper.GetBool("timestamps")
 	compact := viper.GetString(common.KeyOutput) == "compact"
 	colorMode := encoder.ColorMode(viper.GetString(common.KeyColor))
 	includeFields := viper.GetStringSlice("include-fields")
 	excludeFields := viper.GetStringSlice("exclude-fields")
 
-	request := getRequest(includeFields, excludeFields, namespaces, host, processes, pods)
+	request := getRequest(includeFields, excludeFields, GetFilter())
 	stream, err := client.GetEvents(ctx, request)
 	if err != nil {
 		logger.GetLogger().WithError(err).Fatal("Failed to call GetEvents")
@@ -110,6 +133,7 @@ func New() *cobra.Command {
 	cmd := cobra.Command{
 		Use:   "getevents",
 		Short: "Print events",
+		Long:  fmt.Sprintf(DocLong, "tetra"),
 		Run: func(cmd *cobra.Command, args []string) {
 			fi, _ := os.Stdin.Stat()
 			if fi.Mode()&os.ModeNamedPipe != 0 {

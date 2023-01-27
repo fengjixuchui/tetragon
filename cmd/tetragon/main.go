@@ -11,9 +11,9 @@ import (
 	pprofhttp "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -221,11 +221,10 @@ func tetragonExecute() error {
 		cancel()
 	}()
 
-	sensors.LogRegisteredSensorsAndProbes()
-
 	if err := obs.InitSensorManager(); err != nil {
 		return err
 	}
+	observer.SensorManager.LogSensorsAndProbes(ctx)
 
 	/* Remove any stale programs, otherwise feature set change can cause
 	 * old programs to linger resulting in undefined behavior. And because
@@ -321,7 +320,43 @@ func tetragonExecute() error {
 		}
 	}
 
+	// Periodically log status
+	go logStatus(ctx, obs)
+
 	return obs.Start(ctx)
+}
+
+// Periodically log current status every 1 hour. For lost or error
+// events we ratelimit statistics to 1 message per every 5mins to
+// continuously infor users that events are being lost without
+// polluting logs.
+func logStatus(ctx context.Context, obs *observer.Observer) {
+	prevLost := uint64(0)
+	prevErrors := uint64(0)
+	lostTicker := time.NewTicker(5 * time.Minute)
+	defer lostTicker.Stop()
+	logTicker := time.NewTicker(1 * time.Hour)
+	defer logTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-logTicker.C:
+			// We always print stats
+			obs.PrintStats()
+			// Update lost and errors, to not print two consecutive lines at same time
+			prevLost = obs.ReadLostEvents()
+			prevErrors = obs.ReadErrorEvents()
+		case <-lostTicker.C:
+			lost := obs.ReadLostEvents()
+			errors := obs.ReadErrorEvents()
+			if lost > prevLost || errors > prevErrors {
+				obs.PrintStats()
+				prevLost = lost
+				prevErrors = errors
+			}
+		}
+	}
 }
 
 // getObserverDir returns the path to the observer directory based on the BPF
@@ -346,8 +381,35 @@ func startExporter(ctx context.Context, server *server.Server) error {
 		MaxBackups: exportFileMaxBackups,
 		Compress:   exportFileCompress,
 	}
-	if exportFileRotationInterval != 0 {
-		log.WithField("duration", exportFileRotationInterval).Info("Periodically rotating JSON export files")
+
+	// For non k8s deployments we explicitly want log files
+	// with permission 0600
+	if !option.Config.EnableK8s {
+		writer.FileMode = os.FileMode(0600)
+	}
+
+	finfo, err := os.Stat(filepath.Clean(exportFilename))
+	if err == nil && finfo.IsDir() {
+		// Error if exportFilename points to a directory
+		return fmt.Errorf("passed export JSON logs file point to a directory")
+	}
+	logFile := filepath.Base(exportFilename)
+	logsDir, err := filepath.Abs(filepath.Dir(filepath.Clean(exportFilename)))
+	if err != nil {
+		log.WithError(err).Warnf("Failed to get absolute path of exported JSON logs '%s'", exportFilename)
+		// Do not fail; we let lumberjack handle this. We want to
+		// log the rotate logs operation.
+		logsDir = filepath.Dir(exportFilename)
+	}
+
+	if exportFileRotationInterval < 0 {
+		// Passed an invalid interval let's error out
+		return fmt.Errorf("frequency '%s' at which to rotate JSON export files is negative", exportFileRotationInterval.String())
+	} else if exportFileRotationInterval > 0 {
+		log.WithFields(logrus.Fields{
+			"directory": logsDir,
+			"frequency": exportFileRotationInterval.String(),
+		}).Info("Periodically rotating JSON export files")
 		go func() {
 			ticker := time.NewTicker(exportFileRotationInterval)
 			for {
@@ -355,15 +417,20 @@ func startExporter(ctx context.Context, server *server.Server) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					log.WithFields(logrus.Fields{
+						"file":      logFile,
+						"directory": logsDir,
+					}).Info("Rotating JSON logs export")
 					if rotationErr := writer.Rotate(); rotationErr != nil {
 						log.WithError(rotationErr).
-							WithField("filename", exportFilename).
+							WithField("file", exportFilename).
 							Warn("Failed to rotate JSON export file")
 					}
 				}
 			}
 		}()
 	}
+
 	encoder := json.NewEncoder(writer)
 	var rateLimiter *ratelimit.RateLimiter
 	if exportRateLimit >= 0 {
@@ -429,6 +496,24 @@ func getWatcher() (watcher.K8sResourceWatcher, error) {
 	return watcher.NewFakeK8sWatcher(nil), nil
 }
 
+func startGopsServer() error {
+	// Empty means no gops
+	if option.Config.GopsAddr == "" {
+		return nil
+	}
+
+	if err := gops.Listen(gops.Options{
+		Addr:                   option.Config.GopsAddr,
+		ReuseSocketAddrAndPort: true,
+	}); err != nil {
+		return err
+	}
+
+	log.WithField("addr", option.Config.GopsAddr).Info("Starting gops server")
+
+	return nil
+}
+
 func execute() error {
 	rootCmd := &cobra.Command{
 		Use:   "tetragon",
@@ -436,11 +521,7 @@ func execute() error {
 		Run: func(cmd *cobra.Command, args []string) {
 			readAndSetFlags()
 
-			log.WithField("addr", option.Config.GopsAddr).Info("Starting gops server")
-			if err := gops.Listen(gops.Options{
-				Addr:                   option.Config.GopsAddr,
-				ReuseSocketAddrAndPort: true,
-			}); err != nil {
+			if err := startGopsServer(); err != nil {
 				log.WithError(err).Fatal("Failed to start gops")
 			}
 
@@ -451,27 +532,7 @@ func execute() error {
 	}
 
 	cobra.OnInitialize(func() {
-		viper.SetEnvPrefix("tetragon")
-		viper.SetConfigName("config")
-		viper.SetConfigType("yaml")
-		viper.AddConfigPath(".") // look for a config file in cwd first, useful during development
-		if err := viper.ReadInConfig(); err == nil {
-			log.Info("Loaded config from file")
-		}
-		if viper.IsSet(keyConfigDir) {
-			configDir := viper.GetString(keyConfigDir)
-			cm, err := option.ReadDirConfig(configDir)
-			if err != nil {
-				log.WithField(keyConfigDir, configDir).WithError(err).Fatal("Failed to read config from directory")
-			}
-			if err := viper.MergeConfigMap(cm); err != nil {
-				log.WithField(keyConfigDir, configDir).WithError(err).Fatal("Failed to merge config from directory")
-			}
-			log.WithField(keyConfigDir, configDir).Info("Loaded config from directory")
-		}
-		replacer := strings.NewReplacer("-", "_")
-		viper.SetEnvKeyReplacer(replacer)
-		viper.AutomaticEnv()
+		readConfigSettings(adminTgConfDir, adminTgConfDropIn, packageTgConfDropIns)
 	})
 
 	flags := rootCmd.PersistentFlags()
@@ -497,9 +558,9 @@ func execute() error {
 	flags.Bool(keyEnableK8sAPI, false, "Access Kubernetes API to associate Tetragon events with Kubernetes pods")
 	flags.Bool(keyEnableCiliumAPI, false, "Access Cilium API to associate Tetragon events with Cilium endpoints and DNS cache")
 	flags.Bool(keyEnableProcessAncestors, true, "Include ancestors in process exec events")
-	flags.String(keyMetricsServer, "", "Metrics server address (e.g. ':2112'). Set it to an empty string to disable.")
+	flags.String(keyMetricsServer, "", "Metrics server address (e.g. ':2112'). Disabled by default")
 	flags.String(keyServerAddress, "localhost:54321", "gRPC server address")
-	flags.String(keyGopsAddr, "", "gops server address (e.g. 'localhost:8118'). Defaults to a random port on localhost.")
+	flags.String(keyGopsAddr, "", "gops server address (e.g. 'localhost:8118'). Disabled by default")
 	flags.String(keyCiliumBPF, "", "Cilium BPF directory")
 	flags.Bool(keyEnableProcessCred, false, "Enable process_cred events")
 	flags.Bool(keyEnableProcessNs, false, "Enable namespace information in process_exec and process_kprobe events")

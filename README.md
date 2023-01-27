@@ -81,6 +81,12 @@ For getting started without having to deploy on a Kubernetes cluster, please ref
 
 [docker-deployment]: ./docs/deployment/docker/README.md
 
+## Package deployment
+
+For deploying Tetragon as a systemd service, please refer to the [Package deployment guide][package-deployment].
+
+[package-deployment]: ./docs/deployment/package/README.md
+
 ## Kubernetes Quickstart Guide
 
 This Quickstart guide uses a Kind cluster and a helm-based installation to
@@ -638,23 +644,50 @@ Since version 0.8.4, all Tetragon container images are signed using cosign.
 Let's verify a Tetragon image's signature using the `cosign verify` command:
 
 ```bash
-$ COSIGN_EXPERIMENTAL=1 cosign verify --certificate-github-workflow-repository cilium/tetragon --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-github-workflow-name "Image CI Releases" --certificate-github-workflow-ref refs/tags/[RELEASE TAG] quay.io/cilium/tetragon:v0.8.4 | jq
+$ COSIGN_EXPERIMENTAL=1 cosign verify --certificate-github-workflow-repository cilium/tetragon --certificate-oidc-issuer https://token.actions.githubusercontent.com <Image URL> | jq
 ```
 
 **Note**
 
 `COSIGN_EXPERIMENTAL=1` is used to allow verification of images signed in KEYLESS mode. To learn more about keyless signing, please refer to [Keyless Signatures](https://github.com/sigstore/cosign/blob/main/KEYLESS.md#keyless-signatures).
 
-`--certificate-github-workflow-name string` contains the workflow claim from the GitHub OIDC Identity token that contains the name of the executed workflow. For the names of workflows used to build Tetragon images, see the build image workflows under [Tetragon workflows](https://github.com/cilium/tetragon/tree/main/.github/workflows).
+## Software Bill of Materials
 
-`--certificate-github-workflow-ref string` contains the ref claim from the GitHub OIDC Identity token that contains the git ref that the workflow run was based upon.
+A Software Bill of Materials (SBOM) is a complete, formally structured list of
+components that are required to build a given piece of software. SBOM provides
+insight into the software supply chain and any potential concerns related to
+license compliance and security that might exist.
+
+Starting with version 0.8.4, all Tetragon images include an SBOM. The SBOM is
+generated in [SPDX](https://spdx.dev/) format using the [bom](https://github.com/kubernetes-sigs/bom) tool.
+If you are new to the concept of SBOM, see [what an SBOM can do for you](https://www.chainguard.dev/unchained/what-an-sbom-can-do-for-you).
+
+### Download SBOM
+
+  The SBOM can be downloaded from the supplied Tetragon image using the `cosign download sbom` command.
+
+  ```bash
+  $ cosign download sbom --output-file sbom.spdx <Image URL>
+  ```
+### Verify SBOM Image Signature
+
+To ensure the SBOM is tamper-proof, its signature can be verified using the
+`cosign verify` command.
+
+```bash
+$ COSIGN_EXPERIMENTAL=1 cosign verify --certificate-github-workflow-repository cilium/tetragon --certificate-oidc-issuer https://token.actions.githubusercontent.com --attachment sbom <Image URL> | jq
+```
+It can be validated that the SBOM image was signed using Github Actions in the Cilium
+repository from the `Issuer` and `Subject` fields of the output.
 
 # FAQ
 
 **Q:** Can I install and use Tetragon in standalone mode (outside of k8s)?
 
 **A:** Yes! You can run `make` to generate standalone binaries and run them directly.
-`make install` will do the same thing and also install to your `PATH`.
+Make sure to take a look at the [Development Setup](docs/contributing/development/README.md#development-setup)
+guide for the build requirements. Then use `sudo ./tetragon --bpf-lib bpf/objs`
+to run Tetragon.
 
 ----
 
@@ -678,6 +711,10 @@ this is with `git fetch origin/main && git rebase --signoff origin/main`. Then p
 [Uncovering a Sophisticated Kubernetes Attack in Real Time Part II.](https://www.oreilly.com/library/view/infrastructure-ops/0636920625377/video335775.html) - Jed Salazar & Natália Réka Ivánkó, O'Reilly Superstream Series, Infrastructure & Ops, 2021
 
 [Keeping your cluster safe from attacks with eBPF](https://www.youtube.com/watch?v=agN68U8x1go) - Jed Salazar & Natália Réka Ivánkó, eBPF Summit, 2021
+
+[You and Your Security Profiles; Generating Security Policies with the Help of eBPF](https://www.youtube.com/watch?v=EhQI1qPVb0E) - John Fastabend & Natália Réka Ivánkó, eBPF Day North America, 2022
+
+[Container Security and Runtime Enforcement with Tetragon](https://www.youtube.com/watch?v=fw40ROmswbM) - Djalal Harouni, eBPF Summit, 2022
 
 ### Book
 

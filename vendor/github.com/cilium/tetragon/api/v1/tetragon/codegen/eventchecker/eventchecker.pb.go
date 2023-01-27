@@ -274,6 +274,8 @@ func CheckerFromEvent(event Event) (EventChecker, error) {
 		return NewProcessTracepointChecker().FromProcessTracepoint(ev), nil
 	case *tetragon.Test:
 		return NewTestChecker().FromTest(ev), nil
+	case *tetragon.ProcessLoader:
+		return NewProcessLoaderChecker().FromProcessLoader(ev), nil
 
 	default:
 		return nil, fmt.Errorf("Unhandled event type %T", event)
@@ -313,6 +315,8 @@ func EventFromResponse(response *tetragon.GetEventsResponse) (Event, error) {
 		return ev.ProcessTracepoint, nil
 	case *tetragon.GetEventsResponse_Test:
 		return ev.Test, nil
+	case *tetragon.GetEventsResponse_ProcessLoader:
+		return ev.ProcessLoader, nil
 
 	default:
 		return nil, fmt.Errorf("Unknown event type %T", response.Event)
@@ -519,10 +523,11 @@ nextCheck:
 
 // ProcessExitChecker implements a checker struct to check a ProcessExit event
 type ProcessExitChecker struct {
-	Process *ProcessChecker              `json:"process,omitempty"`
-	Parent  *ProcessChecker              `json:"parent,omitempty"`
-	Signal  *stringmatcher.StringMatcher `json:"signal,omitempty"`
-	Status  *uint32                      `json:"status,omitempty"`
+	Process *ProcessChecker                    `json:"process,omitempty"`
+	Parent  *ProcessChecker                    `json:"parent,omitempty"`
+	Signal  *stringmatcher.StringMatcher       `json:"signal,omitempty"`
+	Status  *uint32                            `json:"status,omitempty"`
+	Time    *timestampmatcher.TimestampMatcher `json:"time,omitempty"`
 }
 
 // CheckEvent checks a single event and implements the EventChecker interface
@@ -573,6 +578,11 @@ func (checker *ProcessExitChecker) Check(event *tetragon.ProcessExit) error {
 			return fmt.Errorf("ProcessExitChecker: Status has value %d which does not match expected value %d", event.Status, *checker.Status)
 		}
 	}
+	if checker.Time != nil {
+		if err := checker.Time.Match(event.Time); err != nil {
+			return fmt.Errorf("ProcessExitChecker: Time check failed: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -600,6 +610,12 @@ func (checker *ProcessExitChecker) WithStatus(check uint32) *ProcessExitChecker 
 	return checker
 }
 
+// WithTime adds a Time check to the ProcessExitChecker
+func (checker *ProcessExitChecker) WithTime(check *timestampmatcher.TimestampMatcher) *ProcessExitChecker {
+	checker.Time = check
+	return checker
+}
+
 //FromProcessExit populates the ProcessExitChecker using data from a ProcessExit event
 func (checker *ProcessExitChecker) FromProcessExit(event *tetragon.ProcessExit) *ProcessExitChecker {
 	if event == nil {
@@ -616,6 +632,8 @@ func (checker *ProcessExitChecker) FromProcessExit(event *tetragon.ProcessExit) 
 		val := event.Status
 		checker.Status = &val
 	}
+	// NB: We don't want to match timestamps for now
+	checker.Time = nil
 	return checker
 }
 
@@ -1087,6 +1105,90 @@ func (checker *TestChecker) FromTest(event *tetragon.Test) *TestChecker {
 		val := event.Arg3
 		checker.Arg3 = &val
 	}
+	return checker
+}
+
+// ProcessLoaderChecker implements a checker struct to check a ProcessLoader event
+type ProcessLoaderChecker struct {
+	Process *ProcessChecker              `json:"process,omitempty"`
+	Path    *stringmatcher.StringMatcher `json:"path,omitempty"`
+	Buildid *bytesmatcher.BytesMatcher   `json:"buildid,omitempty"`
+}
+
+// CheckEvent checks a single event and implements the EventChecker interface
+func (checker *ProcessLoaderChecker) CheckEvent(event Event) error {
+	if ev, ok := event.(*tetragon.ProcessLoader); ok {
+		return checker.Check(ev)
+	}
+	return fmt.Errorf("%T is not a ProcessLoader event", event)
+}
+
+// CheckResponse checks a single gRPC response and implements the EventChecker interface
+func (checker *ProcessLoaderChecker) CheckResponse(response *tetragon.GetEventsResponse) error {
+	event, err := EventFromResponse(response)
+	if err != nil {
+		return err
+	}
+	return checker.CheckEvent(event)
+}
+
+// NewProcessLoaderChecker creates a new ProcessLoaderChecker
+func NewProcessLoaderChecker() *ProcessLoaderChecker {
+	return &ProcessLoaderChecker{}
+}
+
+// Check checks a ProcessLoader event
+func (checker *ProcessLoaderChecker) Check(event *tetragon.ProcessLoader) error {
+	if event == nil {
+		return fmt.Errorf("ProcessLoaderChecker: ProcessLoader event is nil")
+	}
+
+	if checker.Process != nil {
+		if err := checker.Process.Check(event.Process); err != nil {
+			return fmt.Errorf("ProcessLoaderChecker: Process check failed: %w", err)
+		}
+	}
+	if checker.Path != nil {
+		if err := checker.Path.Match(event.Path); err != nil {
+			return fmt.Errorf("ProcessLoaderChecker: Path check failed: %w", err)
+		}
+	}
+	if checker.Buildid != nil {
+		if err := checker.Buildid.Match(event.Buildid); err != nil {
+			return fmt.Errorf("ProcessLoaderChecker: Buildid check failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// WithProcess adds a Process check to the ProcessLoaderChecker
+func (checker *ProcessLoaderChecker) WithProcess(check *ProcessChecker) *ProcessLoaderChecker {
+	checker.Process = check
+	return checker
+}
+
+// WithPath adds a Path check to the ProcessLoaderChecker
+func (checker *ProcessLoaderChecker) WithPath(check *stringmatcher.StringMatcher) *ProcessLoaderChecker {
+	checker.Path = check
+	return checker
+}
+
+// WithBuildid adds a Buildid check to the ProcessLoaderChecker
+func (checker *ProcessLoaderChecker) WithBuildid(check *bytesmatcher.BytesMatcher) *ProcessLoaderChecker {
+	checker.Buildid = check
+	return checker
+}
+
+//FromProcessLoader populates the ProcessLoaderChecker using data from a ProcessLoader event
+func (checker *ProcessLoaderChecker) FromProcessLoader(event *tetragon.ProcessLoader) *ProcessLoaderChecker {
+	if event == nil {
+		return checker
+	}
+	if event.Process != nil {
+		checker.Process = NewProcessChecker().FromProcess(event.Process)
+	}
+	checker.Path = stringmatcher.Full(event.Path)
+	checker.Buildid = bytesmatcher.Full(event.Buildid)
 	return checker
 }
 
