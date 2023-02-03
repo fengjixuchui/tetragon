@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright Authors of Cilium */
+
+#ifndef __GENERIC_CALLS_H__
+#define __GENERIC_CALLS_H__
+
 #include "bpf_tracing.h"
 
 #define MAX_TOTAL 9000
 
 static inline __attribute__((always_inline)) int
 generic_process_event0(struct pt_regs *ctx, struct bpf_map_def *heap_map,
-		       struct bpf_map_def *map, struct bpf_map_def *tailcals,
-		       struct bpf_map_def *config_map)
+		       struct bpf_map_def *tailcals, struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
 	struct event_config *config;
@@ -59,7 +62,7 @@ generic_process_event0(struct pt_regs *ctx, struct bpf_map_def *heap_map,
 		asm volatile("%[a0m] &= 0xffff;\n" ::[a0m] "+r"(a0m)
 			     :);
 
-		errv = read_call_arg(ctx, e, 0, ty, total, a0, a0m, map);
+		errv = read_call_arg(ctx, e, 0, ty, total, a0, a0m);
 		if (errv > 0)
 			total += errv;
 		/* Follow filter lookup failed so lets abort the event.
@@ -79,7 +82,6 @@ generic_process_event0(struct pt_regs *ctx, struct bpf_map_def *heap_map,
 static inline __attribute__((always_inline)) int
 generic_process_event_and_setup(struct pt_regs *ctx,
 				struct bpf_map_def *heap_map,
-				struct bpf_map_def *map,
 				struct bpf_map_def *tailcals,
 				struct bpf_map_def *config_map)
 {
@@ -115,13 +117,12 @@ generic_process_event_and_setup(struct pt_regs *ctx,
 	}
 	e->common.op = MSG_OP_GENERIC_KPROBE;
 	e->common.flags = 0;
-	return generic_process_event0(ctx, heap_map, map, tailcals, config_map);
+	return generic_process_event0(ctx, heap_map, tailcals, config_map);
 }
 
 static inline __attribute__((always_inline)) int
 generic_process_event1(void *ctx, struct bpf_map_def *heap_map,
-		       struct bpf_map_def *map, struct bpf_map_def *tailcals,
-		       struct bpf_map_def *config_map)
+		       struct bpf_map_def *tailcals, struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
 	struct event_config *config;
@@ -150,7 +151,7 @@ generic_process_event1(void *ctx, struct bpf_map_def *heap_map,
 		asm volatile("%[a1m] &= 0xffff;\n" ::[a1m] "+r"(a1m)
 			     :);
 
-		errv = read_call_arg(ctx, e, 1, ty, total, a1, a1m, map);
+		errv = read_call_arg(ctx, e, 1, ty, total, a1, a1m);
 		if (errv > 0)
 			total += errv;
 		if (errv < 0)
@@ -163,8 +164,7 @@ generic_process_event1(void *ctx, struct bpf_map_def *heap_map,
 
 static inline __attribute__((always_inline)) int
 generic_process_event2(void *ctx, struct bpf_map_def *heap_map,
-		       struct bpf_map_def *map, struct bpf_map_def *tailcals,
-		       struct bpf_map_def *config_map)
+		       struct bpf_map_def *tailcals, struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
 	struct event_config *config;
@@ -193,7 +193,7 @@ generic_process_event2(void *ctx, struct bpf_map_def *heap_map,
 		asm volatile("%[a2m] &= 0xffff;\n" ::[a2m] "+r"(a2m)
 			     :);
 
-		errv = read_call_arg(ctx, e, 2, ty, total, a2, a2m, map);
+		errv = read_call_arg(ctx, e, 2, ty, total, a2, a2m);
 		if (errv > 0)
 			total += errv;
 		if (errv < 0)
@@ -206,8 +206,7 @@ generic_process_event2(void *ctx, struct bpf_map_def *heap_map,
 
 static inline __attribute__((always_inline)) int
 generic_process_event3(void *ctx, struct bpf_map_def *heap_map,
-		       struct bpf_map_def *map, struct bpf_map_def *tailcals,
-		       struct bpf_map_def *config_map)
+		       struct bpf_map_def *tailcals, struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
 	struct event_config *config;
@@ -237,7 +236,7 @@ generic_process_event3(void *ctx, struct bpf_map_def *heap_map,
 		asm volatile("%[a3m] &= 0xffff;\n" ::[a3m] "+r"(a3m)
 			     :);
 
-		errv = read_call_arg(ctx, e, 3, ty, total, a3, a3m, map);
+		errv = read_call_arg(ctx, e, 3, ty, total, a3, a3m);
 		if (errv > 0)
 			total += errv;
 		if (errv < 0)
@@ -250,8 +249,7 @@ generic_process_event3(void *ctx, struct bpf_map_def *heap_map,
 
 static inline __attribute__((always_inline)) int
 generic_process_event4(void *ctx, struct bpf_map_def *heap_map,
-		       struct bpf_map_def *map, struct bpf_map_def *tailcals,
-		       struct bpf_map_def *config_map)
+		       struct bpf_map_def *tailcals, struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
 	struct event_config *config;
@@ -280,7 +278,7 @@ generic_process_event4(void *ctx, struct bpf_map_def *heap_map,
 		asm volatile("%[a4m] &= 0xffff;\n" ::[a4m] "+r"(a4m)
 			     :);
 
-		errv = read_call_arg(ctx, e, 4, ty, total, a4, a4m, map);
+		errv = read_call_arg(ctx, e, 4, ty, total, a4, a4m);
 		if (errv > 0)
 			total += errv;
 		if (errv < 0)
@@ -292,3 +290,5 @@ generic_process_event4(void *ctx, struct bpf_map_def *heap_map,
 	tail_call(ctx, tailcals, 6);
 	return 0;
 }
+
+#endif /* __GENERIC_CALLS_H__ */

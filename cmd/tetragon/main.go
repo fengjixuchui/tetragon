@@ -203,7 +203,12 @@ func tetragonExecute() error {
 
 	// Check if option to remove old BPF and maps is enabled.
 	if option.Config.ReleasePinned {
-		os.RemoveAll(observerDir)
+		err := os.RemoveAll(observerDir)
+		if err != nil {
+			log.WithField("bpf-dir", observerDir).WithError(err).Warn("BPF: failed to release pinned BPF programs and maps, Consider removing it manually")
+		} else {
+			log.WithField("bpf-dir", observerDir).Info("BPF: successfully released pinned BPF programs and maps")
+		}
 	}
 
 	// Get observer from configFile
@@ -236,6 +241,10 @@ func tetragonExecute() error {
 
 	err := btf.InitCachedBTF(ctx, option.Config.HubbleLib, option.Config.BTF)
 	if err != nil {
+		return err
+	}
+
+	if err := observer.InitDataCache(dataCacheSize); err != nil {
 		return err
 	}
 
@@ -294,6 +303,8 @@ func tetragonExecute() error {
 	if option.Config.EnableK8s {
 		go crd.WatchTracePolicy(ctx, observer.SensorManager)
 	}
+
+	obs.LogPinnedBpf(observerDir)
 
 	// load base sensor
 	if err := base.GetInitialSensor().Load(ctx, observerDir, observerDir, option.Config.CiliumDir); err != nil {
@@ -546,6 +557,7 @@ func execute() error {
 	flags.String(keyKernelVersion, "", "Kernel version")
 	flags.Int(keyVerbosity, 0, "set verbosity level for eBPF verifier dumps. Pass 0 for silent, 1 for truncated logs, 2 for a full dump")
 	flags.Int(keyProcessCacheSize, 65536, "Size of the process cache")
+	flags.Int(keyDataCacheSize, 1024, "Size of the data events cache")
 	flags.Bool(keyForceSmallProgs, false, "Force loading small programs, even in kernels with >= 5.3 versions")
 	flags.String(keyExportFilename, "", "Filename for JSON export. Disabled by default")
 	flags.Int(keyExportFileMaxSizeMB, 10, "Size in MB for rotating JSON export files")
