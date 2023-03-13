@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/cilium/tetragon/pkg/api/tracingapi"
+	"github.com/cilium/tetragon/pkg/arch"
 	"github.com/cilium/tetragon/pkg/grpc/tracing"
+	"github.com/cilium/tetragon/pkg/idtable"
 	"github.com/cilium/tetragon/pkg/k8s/apis/cilium.io/v1alpha1"
 	"github.com/cilium/tetragon/pkg/logger"
 	"github.com/cilium/tetragon/pkg/observer"
@@ -292,7 +294,7 @@ func TestKprobeSelectors(t *testing.T) {
 		sels := selectorsFromWhenceVals(t, filterWhenceVals, 2 /* whenceIdx */, filterOperator)
 		spec := v1alpha1.TracingPolicySpec{
 			KProbes: []v1alpha1.KProbeSpec{{
-				Call:    "__x64_sys_lseek",
+				Call:    "sys_lseek",
 				Return:  true,
 				Syscall: true,
 				ReturnArg: v1alpha1.KProbeArg{
@@ -316,7 +318,7 @@ func TestKprobeSelectors(t *testing.T) {
 		ret := make(map[uint64]int)
 		perfring.RunSubTest(t, ctx, name, op, func(ev notify.Message) error {
 			if kpEvent, ok := ev.(*tracing.MsgGenericKprobeUnix); ok {
-				if kpEvent.FuncName != "__x64_sys_lseek" {
+				if kpEvent.FuncName != arch.AddSyscallPrefixTestHelper(t, "sys_lseek") {
 					return fmt.Errorf("unexpected kprobe event, func:%s", kpEvent.FuncName)
 				}
 				if len(kpEvent.Args) != 2 {
@@ -364,7 +366,10 @@ func TestKprobeSelectors(t *testing.T) {
 			spec := makeSpec(t, tcs.specFilterVals, tcs.specOperator)
 			if i == 0 {
 			} else {
-				if err := ReloadGenericKprobeSelectors(kpSensor, &spec.KProbes[0]); err != nil {
+				// Create URL and FQDN tables to store URLs and FQDNs for this kprobe
+				var argActionTable idtable.Table
+
+				if err := ReloadGenericKprobeSelectors(kpSensor, &spec.KProbes[0], &argActionTable); err != nil {
 					t.Fatalf("failed to reload kprobe prog: %s", err)
 				}
 			}

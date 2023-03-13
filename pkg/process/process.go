@@ -11,7 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	hubble "github.com/cilium/hubble/pkg/cilium"
+	hubble "github.com/cilium/tetragon/pkg/oldhubble/cilium"
 
 	"github.com/cilium/tetragon/api/v1/tetragon"
 	"github.com/cilium/tetragon/pkg/api"
@@ -29,8 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	hubblev1 "github.com/cilium/hubble/pkg/api/v1"
-	corev1 "k8s.io/api/core/v1"
+	hubblev1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
 )
 
 // ProcessInternal is the internal representation of a process.
@@ -206,10 +205,8 @@ func GetProcess(
 	}, endpoint
 }
 
-func FindPod(containerId string) (*corev1.Pod, *corev1.ContainerStatus, bool) {
-	return k8s.FindPod(containerId)
-}
-
+// GetPodInfo() constructs and returns the Kubernetes Pod information associated with
+// the Container ID and the PID inside this container.
 func GetPodInfo(cid, bin, args string, nspid uint32) (*tetragon.Pod, *hubblev1.Endpoint) {
 	return getPodInfo(k8s, cid, bin, args, nspid)
 }
@@ -264,6 +261,7 @@ func AddCloneEvent(event *tetragonAPI.MsgCloneEvent) error {
 		pi.process.StartTime = ktime.ToProto(event.Ktime)
 		pi.process.Refcnt = 1
 		if pi.process.Pod != nil && pi.process.Pod.Container != nil {
+			// Set the pid inside the container
 			pi.process.Pod.Container.Pid = &wrapperspb.UInt32Value{Value: event.NSPID}
 		}
 		if option.Config.EnableK8s && pi.process.Docker != "" && pi.process.Pod == nil {
@@ -287,7 +285,7 @@ func GetProcessEndpoint(p *tetragon.Process) *hubblev1.Endpoint {
 	if p.Docker == "" {
 		return nil
 	}
-	pod, _, ok := FindPod(p.Docker)
+	pod, _, ok := k8s.FindContainer(p.Docker)
 	if !ok {
 		logger.GetLogger().WithField("container id", p.Docker).Trace("failed to get pod")
 		return nil

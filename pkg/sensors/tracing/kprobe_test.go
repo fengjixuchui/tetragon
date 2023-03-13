@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/tetragon/api/v1/tetragon"
 	ec "github.com/cilium/tetragon/api/v1/tetragon/codegen/eventchecker"
+	"github.com/cilium/tetragon/pkg/arch"
 	"github.com/cilium/tetragon/pkg/bpf"
 	yaml "github.com/cilium/tetragon/pkg/config"
 	"github.com/cilium/tetragon/pkg/jsonchecker"
@@ -59,7 +61,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     syscall: true
     args:
     - index: 0
@@ -114,7 +116,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_lseek"
+  - call: "sys_lseek"
     return: false
     syscall: true
     args:
@@ -144,12 +146,12 @@ spec:
 	unix.Seek(-1, 0, 4444)
 }
 
-func getTestKprobeObjectWRChecker() ec.MultiEventChecker {
+func getTestKprobeObjectWRChecker(t *testing.T) ec.MultiEventChecker {
 	myNs := ec.NewNamespacesChecker().FromNamespaces(namespace.GetCurrentNamespace())
 	myCaps := ec.NewCapabilitiesChecker().FromCapabilities(caps.GetCurrentCapabilities())
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_write")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_write"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -176,7 +178,7 @@ func runKprobeObjectWriteRead(t *testing.T, writeReadHook string) {
 		t.Fatalf("writeFile(%s): err %s", testConfigFile, err)
 	}
 
-	checker := getTestKprobeObjectWRChecker()
+	checker := getTestKprobeObjectWRChecker(t)
 
 	obs, err := observer.GetDefaultObserverWithFile(t, ctx, testConfigFile, tus.Conf().TetragonLib)
 	if err != nil {
@@ -205,7 +207,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -251,7 +253,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -296,7 +298,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -331,7 +333,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -371,7 +373,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -462,7 +464,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_read"
+  - call: "sys_read"
     syscall: true
     args:
     - index: 0
@@ -485,7 +487,7 @@ spec:
         - ` + fdString
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_read")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_read"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -507,7 +509,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_read"
+  - call: "sys_read"
     syscall: true
     return: true
     args:
@@ -533,7 +535,7 @@ spec:
         - ` + fdString
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_read")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_read"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -547,10 +549,10 @@ spec:
 	runKprobeObjectRead(t, readHook, checker, fd, fd2)
 }
 
-// __x64_sys_openat trace
-func getOpenatChecker(dir string) ec.MultiEventChecker {
+// sys_openat trace
+func getOpenatChecker(t *testing.T, dir string) ec.MultiEventChecker {
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_openat")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_openat"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -635,7 +637,7 @@ func testKprobeObjectOpenHook(pidStr string, path string) string {
     name: "sys-read"
   spec:
     kprobes:
-    - call: "__x64_sys_openat"
+    - call: "sys_openat"
       return: false
       syscall: true
       args:
@@ -663,14 +665,14 @@ func TestKprobeObjectOpen(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func TestKprobeObjectOpenMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), true, dir, false)
 }
 
 func testKprobeObjectMultiValueOpenHook(pidStr string, path string) string {
@@ -680,7 +682,7 @@ func testKprobeObjectMultiValueOpenHook(pidStr string, path string) string {
     name: "sys-read"
   spec:
     kprobes:
-    - call: "__x64_sys_openat"
+    - call: "sys_openat"
       return: false
       syscall: true
       args:
@@ -709,14 +711,14 @@ func TestKprobeObjectMultiValueOpen(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectMultiValueOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func TestKprobeObjectMultiValueOpenMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectMultiValueOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), true, dir, false)
 }
 
 func TestKprobeObjectFilterOpen(t *testing.T) {
@@ -728,7 +730,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_openat"
+  - call: "sys_openat"
     return: false
     syscall: true
     args:
@@ -762,7 +764,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_openat"
+  - call: "sys_openat"
     return: false
     syscall: true
     args:
@@ -795,7 +797,7 @@ func testKprobeObjectFilterPrefixOpenHook(pidStr string, path string) string {
     name: "sys-read"
   spec:
     kprobes:
-    - call: "__x64_sys_openat"
+    - call: "sys_openat"
       return: false
       syscall: true
       args:
@@ -823,14 +825,14 @@ func TestKprobeObjectFilterPrefixOpen(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func TestKprobeObjectFilterPrefixOpenMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), true, dir, false)
 }
 
 func testKprobeObjectFilterPrefixExactOpenHook(pidStr string, path string) string {
@@ -840,7 +842,7 @@ func testKprobeObjectFilterPrefixExactOpenHook(pidStr string, path string) strin
     name: "sys-read"
   spec:
     kprobes:
-    - call: "__x64_sys_openat"
+    - call: "sys_openat"
       return: false
       syscall: true
       args:
@@ -868,14 +870,14 @@ func TestKprobeObjectFilterPrefixExactOpen(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixExactOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func TestKprobeObjectFilterPrefixExactOpenMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixExactOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), true, dir, false)
 }
 
 func testKprobeObjectFilterPrefixSubdirOpenHook(pidStr string, path string) string {
@@ -885,7 +887,7 @@ func testKprobeObjectFilterPrefixSubdirOpenHook(pidStr string, path string) stri
     name: "sys-read"
   spec:
     kprobes:
-    - call: "__x64_sys_openat"
+    - call: "sys_openat"
       return: false
       syscall: true
       args:
@@ -913,14 +915,14 @@ func TestKprobeObjectFilterPrefixSubdirOpen(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixSubdirOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func TestKprobeObjectFilterPrefixSubdirOpenMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFilterPrefixSubdirOpenHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), true, dir, false)
 }
 
 func TestKprobeObjectFilterPrefixMissOpen(t *testing.T) {
@@ -932,7 +934,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_openat"
+  - call: "sys_openat"
     return: false
     syscall: true
     args:
@@ -966,7 +968,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_openat"
+  - call: "sys_openat"
     return: false
     syscall: true
     args:
@@ -988,7 +990,7 @@ spec:
         values:
         - "testfile\0"
 `
-	testKprobeObjectFiltered(t, readHook, getOpenatChecker(dir), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getOpenatChecker(t, dir), false, dir, false)
 }
 
 func helloIovecWorldWritev() (err error) {
@@ -1016,10 +1018,10 @@ func TestKprobeObjectWriteVRead(t *testing.T) {
 	writeReadHook := `
 apiVersion: cilium.io/v1alpha1
 metadata:
-  name: "x64-sys-writev"
+  name: "sys-writev"
 spec:
   kprobes:
-  - call: "__x64_sys_writev"
+  - call: "sys_writev"
     return: false
     syscall: true
     args:
@@ -1049,7 +1051,7 @@ spec:
 	kpChecker := ec.NewProcessKprobeChecker("").
 		WithProcess(ec.NewProcessChecker().
 			WithBinary(sm.Suffix(tus.Conf().SelfBinary))).
-		WithFunctionName(sm.Full("__x64_sys_writev")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_writev"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1165,7 +1167,7 @@ func testKprobeObjectFileWriteHook(pidStr string) string {
         - action: followfd
           argFd: 0
           argName: 1
-    - call: "__x64_sys_write"
+    - call: "sys_write"
       syscall: true
       args:
       - index: 0
@@ -1213,7 +1215,7 @@ func testKprobeObjectFileWriteFilteredHook(pidStr string, dir string) string {
         - action: followfd
           argFd: 0
           argName: 1
-    - call: "__x64_sys_write"
+    - call: "sys_write"
       syscall: true
       args:
       - index: 0
@@ -1236,9 +1238,9 @@ func testKprobeObjectFileWriteFilteredHook(pidStr string, dir string) string {
   `
 }
 
-func getWriteChecker(path, flags string) ec.MultiEventChecker {
+func getWriteChecker(t *testing.T, path, flags string) ec.MultiEventChecker {
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_write")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_write"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1259,28 +1261,28 @@ func TestKprobeObjectFileWrite(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFileWriteHook(pidStr)
-	testKprobeObjectFiltered(t, readHook, getWriteChecker(filepath.Join(dir, "testfile"), ""), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getWriteChecker(t, filepath.Join(dir, "testfile"), ""), false, dir, false)
 }
 
 func TestKprobeObjectFileWriteFiltered(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFileWriteFilteredHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getWriteChecker(filepath.Join(dir, "testfile"), ""), false, dir, false)
+	testKprobeObjectFiltered(t, readHook, getWriteChecker(t, filepath.Join(dir, "testfile"), ""), false, dir, false)
 }
 
 func TestKprobeObjectFileWriteMount(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFileWriteHook(pidStr)
-	testKprobeObjectFiltered(t, readHook, getWriteChecker(filepath.Join(dir, "testfile"), ""), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getWriteChecker(t, filepath.Join(dir, "testfile"), ""), true, dir, false)
 }
 
 func TestKprobeObjectFileWriteMountFiltered(t *testing.T) {
 	pidStr := strconv.Itoa(int(observer.GetMyPid()))
 	dir := t.TempDir()
 	readHook := testKprobeObjectFileWriteFilteredHook(pidStr, dir)
-	testKprobeObjectFiltered(t, readHook, getWriteChecker(filepath.Join(dir, "testfile"), ""), true, dir, false)
+	testKprobeObjectFiltered(t, readHook, getWriteChecker(t, filepath.Join(dir, "testfile"), ""), true, dir, false)
 }
 
 func corePathTest(t *testing.T, filePath string, readHook string, writeChecker ec.MultiEventChecker) {
@@ -1359,7 +1361,7 @@ func testMultipleMountsFiltered(t *testing.T, readHook string) {
 
 	filePath := path + "/testfile"
 
-	writeChecker := getWriteChecker("/tmp2/tmp3/tmp4/tmp5/testfile", "")
+	writeChecker := getWriteChecker(t, "/tmp2/tmp3/tmp4/tmp5/testfile", "")
 
 	corePathTest(t, filePath, readHook, writeChecker)
 }
@@ -1393,9 +1395,9 @@ func testMultiplePathComponentsFiltered(t *testing.T, readHook string) {
 	})
 
 	filePath := path + "/testfile"
-	writeChecker := getWriteChecker("/7/8/9/10/11/12/13/14/15/16/testfile", "unresolvedPathComponents")
+	writeChecker := getWriteChecker(t, "/7/8/9/10/11/12/13/14/15/16/testfile", "unresolvedPathComponents")
 	if kernels.EnableLargeProgs() {
-		writeChecker = getWriteChecker("/tmp/0/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/testfile", "")
+		writeChecker = getWriteChecker(t, "/tmp/0/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/testfile", "")
 	}
 
 	corePathTest(t, filePath, readHook, writeChecker)
@@ -1457,9 +1459,9 @@ func testMultipleMountPathFiltered(t *testing.T, readHook string) {
 	})
 
 	filePath := path + "/testfile"
-	writeChecker := getWriteChecker("/7/8/9/10/11/12/13/14/15/16/testfile", "unresolvedPathComponents")
+	writeChecker := getWriteChecker(t, "/7/8/9/10/11/12/13/14/15/16/testfile", "unresolvedPathComponents")
 	if kernels.EnableLargeProgs() {
-		writeChecker = getWriteChecker("/tmp2/tmp3/tmp4/tmp5/0/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/testfile", "")
+		writeChecker = getWriteChecker(t, "/tmp2/tmp3/tmp4/tmp5/0/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/testfile", "")
 	}
 
 	corePathTest(t, filePath, readHook, writeChecker)
@@ -1498,7 +1500,7 @@ metadata:
   name: "sys-linkat-args"
 spec:
   kprobes:
-  - call: "__x64_sys_linkat"
+  - call: "sys_linkat"
     syscall: true
     args:
     - index: 0
@@ -1526,7 +1528,7 @@ spec:
 	var flags int32 = 12345
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_linkat")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_linkat"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1639,10 +1641,10 @@ func TestKprobeOverride(t *testing.T) {
 	openAtHook := `
 apiVersion: cilium.io/v1alpha1
 metadata:
-  name: "x64-sys-openat-override"
+  name: "sys-openat-override"
 spec:
   kprobes:
-  - call: "__x64_sys_openat"
+  - call: "sys_openat"
     return: true
     syscall: true
     args:
@@ -1671,7 +1673,7 @@ spec:
 `
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_openat")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_openat"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1777,7 +1779,7 @@ metadata:
   name: "sys-write-writev"
 spec:
   kprobes:
-  - call: "__x64_sys_writev"
+  - call: "sys_writev"
     syscall: true
     args:
     - index: 0
@@ -1807,7 +1809,7 @@ spec:
 	}
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_writev")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_writev"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1830,7 +1832,7 @@ metadata:
   name: "sys-write-writev"
 spec:
   kprobes:
-  - call: "__x64_sys_writev"
+  - call: "sys_writev"
     syscall: true
     args:
     - index: 0
@@ -1860,7 +1862,7 @@ spec:
 	}
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_writev")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_writev"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1883,7 +1885,7 @@ metadata:
   name: "sys-write-read"
 spec:
   kprobes:
-  - call: "__x64_sys_readv"
+  - call: "sys_readv"
     syscall: true
     args:
     - index: 0
@@ -1914,7 +1916,7 @@ spec:
 	}
 
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_readv")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_readv"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -1981,7 +1983,7 @@ spec:
       - action: FollowFD
         argFd: 0
         argName: 1
-  - call: "__x64_sys_close"
+  - call: "sys_close"
     syscall: true
     args:
     - index: 0
@@ -1991,7 +1993,7 @@ spec:
       - action: UnfollowFD
         argFd: 0
         argName: 0
-  - call: "__x64_sys_read"
+  - call: "sys_read"
     syscall: true
     args:
     - index: 0
@@ -2023,7 +2025,7 @@ func openFile(t *testing.T, file string) int {
 	return fd
 }
 
-// reads 32 bytes from a file, this will trigger a __x64_sys_read.
+// reads 32 bytes from a file, this will trigger a sys_read.
 func readFile(t *testing.T, file string) int {
 	fd := openFile(t, file)
 	var readBytes = make([]byte, 32)
@@ -2047,9 +2049,9 @@ func createFdInstallChecker(fd int, filename string) *ec.ProcessKprobeChecker {
 	return kpChecker
 }
 
-func createReadChecker(filename string) *ec.ProcessKprobeChecker {
+func createReadChecker(t *testing.T, filename string) *ec.ProcessKprobeChecker {
 	kpChecker := ec.NewProcessKprobeChecker("").
-		WithFunctionName(sm.Full("__x64_sys_read")).
+		WithFunctionName(sm.Full(arch.AddSyscallPrefixTestHelper(t, "sys_read"))).
 		WithArgs(ec.NewKprobeArgumentListMatcher().
 			WithOperator(lc.Ordered).
 			WithValues(
@@ -2223,7 +2225,7 @@ func TestKprobeMatchArgsFdEqual(t *testing.T) {
 	kpCheckers := make([]ec.EventChecker, numValues)
 	for i := 0; i < numValues; i++ {
 		readFile(t, allFiles[i])
-		kpCheckers[i] = createReadChecker(allFiles[i])
+		kpCheckers[i] = createReadChecker(t, allFiles[i])
 	}
 
 	checker := ec.NewUnorderedEventChecker(kpCheckers...)
@@ -2259,7 +2261,7 @@ func TestKprobeMatchArgsFdPostfix(t *testing.T) {
 	kpCheckers := make([]ec.EventChecker, numValues)
 	for i := 0; i < numValues; i++ {
 		readFile(t, allFiles[i])
-		kpCheckers[i] = createReadChecker(allFiles[i])
+		kpCheckers[i] = createReadChecker(t, allFiles[i])
 	}
 
 	checker := ec.NewUnorderedEventChecker(kpCheckers...)
@@ -2295,10 +2297,107 @@ func TestKprobeMatchArgsFdPrefix(t *testing.T) {
 	kpCheckers := make([]ec.EventChecker, numValues)
 	for i := 0; i < numValues; i++ {
 		readFile(t, allFiles[i])
-		kpCheckers[i] = createReadChecker(allFiles[i])
+		kpCheckers[i] = createReadChecker(t, allFiles[i])
 	}
 
 	checker := ec.NewUnorderedEventChecker(kpCheckers...)
+	err = jsonchecker.JsonTestCheck(t, checker)
+	assert.NoError(t, err)
+}
+
+func getMatchBinariesCrd(opStr string, vals []string) string {
+	configHook := `apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: "testing-file-match-binaries"
+spec:
+  kprobes:
+  - call: "fd_install"
+    syscall: false
+    return: false
+    args:
+    - index: 0
+      type: int
+    - index: 1
+      type: "file"
+    selectors:
+    - matchBinaries:
+      - operator: "` + opStr + `"
+        values: `
+	for i := 0; i < len(vals); i++ {
+		configHook += fmt.Sprintf("\n        - \"%s\"", vals[i])
+	}
+	return configHook
+}
+
+func createBinariesChecker(binary, filename string) *ec.ProcessKprobeChecker {
+	kpChecker := ec.NewProcessKprobeChecker("").
+		WithProcess(ec.NewProcessChecker().WithBinary(sm.Full(binary))).
+		WithFunctionName(sm.Full("fd_install")).
+		WithArgs(ec.NewKprobeArgumentListMatcher().
+			WithOperator(lc.Subset).
+			WithValues(
+				ec.NewKprobeArgumentChecker().WithFileArg(ec.NewKprobeFileChecker().WithPath(sm.Full(filename))),
+			))
+	return kpChecker
+}
+
+func TestKprobeMatchBinariesIn(t *testing.T) {
+	var doneWG, readyWG sync.WaitGroup
+	defer doneWG.Wait()
+
+	ctx, cancel := context.WithTimeout(context.Background(), tus.Conf().CmdWaitTime)
+	defer cancel()
+
+	createCrdFile(t, getMatchBinariesCrd("In", []string{"/usr/bin/cat"}))
+
+	obs, err := observer.GetDefaultObserverWithFile(t, ctx, testConfigFile, tus.Conf().TetragonLib)
+	if err != nil {
+		t.Fatalf("GetDefaultObserverWithFile error: %s", err)
+	}
+	observer.LoopEvents(ctx, t, &doneWG, &readyWG, obs)
+	readyWG.Wait()
+
+	if err := exec.Command("/usr/bin/cat", "/etc/passwd").Run(); err != nil {
+		t.Fatalf("failed to run cat /etc/passwd: %s", err)
+	}
+
+	if err := exec.Command("/usr/bin/head", "/etc/passwd").Run(); err != nil {
+		t.Fatalf("failed to run head /etc/passwd: %s", err)
+	}
+
+	kpChecker := createBinariesChecker("/usr/bin/cat", "/etc/passwd")
+	checker := ec.NewUnorderedEventChecker(kpChecker)
+	err = jsonchecker.JsonTestCheck(t, checker)
+	assert.NoError(t, err)
+}
+
+func TestKprobeMatchBinariesNotIn(t *testing.T) {
+	var doneWG, readyWG sync.WaitGroup
+	defer doneWG.Wait()
+
+	ctx, cancel := context.WithTimeout(context.Background(), tus.Conf().CmdWaitTime)
+	defer cancel()
+
+	createCrdFile(t, getMatchBinariesCrd("NotIn", []string{"/usr/bin/tail"}))
+
+	obs, err := observer.GetDefaultObserverWithFile(t, ctx, testConfigFile, tus.Conf().TetragonLib)
+	if err != nil {
+		t.Fatalf("GetDefaultObserverWithFile error: %s", err)
+	}
+	observer.LoopEvents(ctx, t, &doneWG, &readyWG, obs)
+	readyWG.Wait()
+
+	if err := exec.Command("/usr/bin/tail", "/etc/passwd").Run(); err != nil {
+		t.Fatalf("failed to run cat /etc/passwd: %s", err)
+	}
+
+	if err := exec.Command("/usr/bin/head", "/etc/passwd").Run(); err != nil {
+		t.Fatalf("failed to run head /etc/passwd: %s", err)
+	}
+
+	kpChecker := createBinariesChecker("/usr/bin/head", "/etc/passwd")
+	checker := ec.NewUnorderedEventChecker(kpChecker)
 	err = jsonchecker.JsonTestCheck(t, checker)
 	assert.NoError(t, err)
 }
@@ -2310,7 +2409,7 @@ metadata:
  name: "sys-write"
 spec:
  kprobes:
- - call: "__x64_sys_write"
+ - call: "sys_write"
    syscall: true
 `
 	ctx := context.Background()
@@ -2324,7 +2423,7 @@ spec:
 		return nil
 	}
 
-	sens, err := sensors.GetMergedSensorFromParserPolicy(cnf.Name(), &cnf.Spec)
+	sens, err := sensors.GetMergedSensorFromParserPolicy(cnf.TpName(), &cnf.Spec)
 	if err != nil {
 		return err
 	}
@@ -2420,7 +2519,7 @@ func TestLoadKprobeSensor(t *testing.T) {
 		tus.SensorMap{Name: "config_map", Progs: []uint{12}},
 
 		// shared with base sensor
-		tus.SensorMap{Name: "execve_map", Progs: []uint{6, 7, 8, 9, 10, 11, 12}},
+		tus.SensorMap{Name: "execve_map", Progs: []uint{0, 6, 7, 8, 9, 10, 11, 12}},
 
 		// generic_kprobe_process_event*,generic_kprobe_filter_arg*,retkprobe
 		tus.SensorMap{Name: "fdinstall_map", Progs: []uint{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12}},
@@ -2440,7 +2539,7 @@ metadata:
   name: "sys-read"
 spec:
   kprobes:
-  - call: "__x64_sys_read"
+  - call: "sys_read"
     syscall: true
     return: true
     args:

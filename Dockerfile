@@ -5,7 +5,7 @@ RUN apt-get install -y linux-libc-dev
 COPY . ./
 RUN make tetragon-bpf LOCAL_CLANG=1
 
-FROM quay.io/cilium/cilium-builder:a2dc3278c48e1593b1f6c8fd9e5c6a982d56a875@sha256:98c4e694805e9a9d410ed73d555e97e91d77e2ab4529b6b51f5243b33ab411b1 as hubble-builder
+FROM quay.io/cilium/cilium-builder:6615810f9d5595ea9639e91255bdbe83acb4b5fb@sha256:595c6a8c06db1dd2a71a4a2891b270af674705b7d1f7a2cfec5bfac64bd2af74 as hubble-builder
 ARG TETRAGON_VERSION
 WORKDIR /go/src/github.com/cilium/tetragon
 RUN apt-get update && apt-get install -y libelf-dev zlib1g-dev
@@ -31,7 +31,7 @@ WORKDIR /src/linux/tools/bpf/bpftool
 RUN make -j $(nproc) LDFLAGS=-static
 RUN strip bpftool
 
-FROM docker.io/library/alpine:3.17.1@sha256:f271e74b17ced29b915d351685fd4644785c6d1559dd1f2d4189a5e851ef753a
+FROM docker.io/library/alpine:3.17.2@sha256:69665d02cb32192e52e07644d76bc6f25abeb5410edc1c7a81a10ba3f0efb90a
 RUN apk add iproute2
 RUN mkdir /var/lib/tetragon/ && \
     apk add --no-cache --update bash

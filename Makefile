@@ -8,7 +8,7 @@ LOCAL_CLANG ?= 0
 LOCAL_CLANG_FORMAT ?= 0
 FORMAT_FIND_FLAGS ?= -name '*.c' -o -name '*.h' -not -path 'bpf/include/vmlinux.h' -not -path 'bpf/include/api.h' -not -path 'bpf/libbpf/*'
 NOOPT ?= 0
-CLANG_IMAGE  = quay.io/cilium/clang:ca424d14eb4326ffc65fccd8049d8a7bfdd06607@sha256:be37c932add0b5f22edd72da3af4ccc4df6dbd54e6e99424fa5190bafc10e55f
+CLANG_IMAGE = quay.io/cilium/clang@sha256:b440ae7b3591a80ffef8120b2ac99e802bbd31dee10f5f15a48566832ae0866f
 TESTER_PROGS_DIR = "contrib/tester-progs"
 # Extra flags to pass to test binary
 EXTRA_TESTFLAGS ?=
@@ -19,7 +19,8 @@ BUILD_PKG_DIR ?= $(shell pwd)/build/$(TARGET_ARCH)
 VERSION ?= $(shell git describe --tags --always)
 GO_GCFLAGS ?= ""
 GO_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)'"
-GO_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -linkmode external -extldflags -static"
+GO_LDFLAGS_STATIC="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -linkmode=external -extldflags=-static"
+GO_IMAGE_LDFLAGS=$(GO_LDFLAGS_STATIC)
 GO_OPERATOR_IMAGE_LDFLAGS="-X 'github.com/cilium/tetragon/pkg/version.Version=$(VERSION)' -s -w"
 
 
@@ -76,6 +77,10 @@ endif
 
 ifeq (1,$(NOOPT))
 GO_GCFLAGS = "all=-N -l"
+endif
+
+ifeq (1,$(STATIC))
+GO_LDFLAGS = $(GO_LDFLAGS_STATIC)
 endif
 
 tetragon-bpf-local:
@@ -279,6 +284,15 @@ check:
 	$(CONTAINER_ENGINE) build -t golangci-lint:tetragon . -f Dockerfile.golangci-lint
 	$(CONTAINER_ENGINE) run --rm -v `pwd`:/app:Z -w /app golangci-lint:tetragon golangci-lint run
 endif
+
+.PHONY: copy-golangci-lint
+copy-golangci-lint:
+	mkdir -p bin/
+	$(CONTAINER_ENGINE) build -t golangci-lint:tetragon . -f Dockerfile.golangci-lint
+	$(eval xid=$(shell docker create golangci-lint:tetragon))
+	echo ${xid}
+	docker cp ${xid}:/usr/bin/golangci-lint bin/golangci-lint
+	docker rm ${xid}
 
 .PHONY: clang-format
 ifeq (1,$(LOCAL_CLANG_FORMAT))

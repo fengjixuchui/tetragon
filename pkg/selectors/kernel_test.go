@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cilium/tetragon/pkg/idtable"
 	"github.com/cilium/tetragon/pkg/k8s/apis/cilium.io/v1alpha1"
 	"github.com/cilium/tetragon/pkg/kernels"
 )
@@ -92,28 +93,28 @@ func TestArgSelectorValue(t *testing.T) {
 }
 
 func TestSelectorOp(t *testing.T) {
-	if op, err := selectorOp("gt"); op != selectorOpGT || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpGT, op, err)
+	if op, err := SelectorOp("gt"); op != SelectorOpGT || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpGT, op, err)
 	}
-	if op, err := selectorOp("lt"); op != selectorOpLT || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpLT, op, err)
+	if op, err := SelectorOp("lt"); op != SelectorOpLT || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpLT, op, err)
 	}
-	if op, err := selectorOp("eq"); op != selectorOpEQ || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpEQ, op, err)
+	if op, err := SelectorOp("eq"); op != SelectorOpEQ || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpEQ, op, err)
 	}
-	if op, err := selectorOp("Equal"); op != selectorOpEQ || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpEQ, op, err)
+	if op, err := SelectorOp("Equal"); op != SelectorOpEQ || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpEQ, op, err)
 	}
-	if op, err := selectorOp("neq"); op != selectorOpNEQ || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpNEQ, op, err)
+	if op, err := SelectorOp("neq"); op != SelectorOpNEQ || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpNEQ, op, err)
 	}
-	if op, err := selectorOp("In"); op != selectorOpIn || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpIn, op, err)
+	if op, err := SelectorOp("In"); op != SelectorOpIn || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpIn, op, err)
 	}
-	if op, err := selectorOp("NotIn"); op != selectorOpNotIn || err != nil {
-		t.Errorf("selectorOp: expected %d actual %d %v\n", selectorOpNotIn, op, err)
+	if op, err := SelectorOp("NotIn"); op != SelectorOpNotIn || err != nil {
+		t.Errorf("selectorOp: expected %d actual %d %v\n", SelectorOpNotIn, op, err)
 	}
-	if op, err := selectorOp("foo"); op != 0 || err == nil {
+	if op, err := SelectorOp("foo"); op != 0 || err == nil {
 		t.Errorf("selectorOp: expected error actual %d %v\n", op, err)
 	}
 }
@@ -183,7 +184,7 @@ func TestParseMatchArg(t *testing.T) {
 		0x06, 0x00, 0x00, 0x00, // value length == 6
 		102, 111, 111, 98, 97, 114, // value ascii "foobar"
 	}
-	if err := parseMatchArg(k, arg1, sig); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchArg(k, arg1, sig); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchArg: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], arg1)
 	}
 
@@ -197,7 +198,7 @@ func TestParseMatchArg(t *testing.T) {
 		0x01, 0x00, 0x00, 0x00, // value 1
 		0x02, 0x00, 0x00, 0x00, // value 2
 	}
-	if err := parseMatchArg(k, arg2, sig); err != nil || bytes.Equal(expected2, k.e[nextArg:k.off]) == false {
+	if err := ParseMatchArg(k, arg2, sig); err != nil || bytes.Equal(expected2, k.e[nextArg:k.off]) == false {
 		t.Errorf("parseMatchArg: error %v expected %v bytes %v parsing %v\n", err, expected2, k.e[nextArg:k.off], arg2)
 	}
 
@@ -206,7 +207,7 @@ func TestParseMatchArg(t *testing.T) {
 	expected3 = append(expected3, expected2[:]...)
 	arg3 := []v1alpha1.ArgSelector{*arg1, *arg2}
 	ks := &KernelSelectorState{off: 0}
-	if err := parseMatchArgs(ks, arg3, sig); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
+	if err := ParseMatchArgs(ks, arg3, sig); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
 		t.Errorf("parseMatchArgs: error %v expected %v bytes %v parsing %v\n", err, expected3, ks.e[0:k.off], arg3)
 	}
 }
@@ -222,7 +223,7 @@ func TestParseMatchPid(t *testing.T) {
 		0x02, 0x00, 0x00, 0x00, // Values[1] == 2
 		0x03, 0x00, 0x00, 0x00, // Values[2] == 3
 	}
-	if err := parseMatchPid(k, pid1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchPid(k, pid1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchPid: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], pid1)
 	}
 
@@ -237,7 +238,7 @@ func TestParseMatchPid(t *testing.T) {
 		0x03, 0x00, 0x00, 0x00, // Values[2] == 3
 		0x04, 0x00, 0x00, 0x00, // Values[2] == 3
 	}
-	if err := parseMatchPid(k, pid2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
+	if err := ParseMatchPid(k, pid2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
 		t.Errorf("parseMatchPid: error %v expected %v bytes %v parsing %v\n", err, expected2, k.e[nextPid:k.off], pid2)
 	}
 
@@ -246,7 +247,7 @@ func TestParseMatchPid(t *testing.T) {
 	expected3 = append(expected3, expected2[:]...)
 	pid3 := []v1alpha1.PIDSelector{*pid1, *pid2}
 	ks := &KernelSelectorState{off: 0}
-	if err := parseMatchPids(ks, pid3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
+	if err := ParseMatchPids(ks, pid3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
 		t.Errorf("parseMatchPid: error %v expected %v bytes %v parsing %v\n", err, expected3, ks.e[0:ks.off], pid3)
 	}
 }
@@ -262,7 +263,7 @@ func TestParseMatchNamespaces(t *testing.T) {
 		0x02, 0x00, 0x00, 0x00, // Values[1] == 2
 		0x03, 0x00, 0x00, 0x00, // Values[2] == 3
 	}
-	if err := parseMatchNamespace(k, ns1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchNamespace(k, ns1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchNamespace: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], ns1)
 	}
 
@@ -277,7 +278,7 @@ func TestParseMatchNamespaces(t *testing.T) {
 		0x03, 0x00, 0x00, 0x00, // Values[2] == 3
 		0x04, 0x00, 0x00, 0x00, // Values[2] == 3
 	}
-	if err := parseMatchNamespace(k, ns2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
+	if err := ParseMatchNamespace(k, ns2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
 		t.Errorf("parseMatchNamespace: error %v expected %v bytes %v parsing %v\n", err, expected2, k.e[nextPid:k.off], ns2)
 	}
 
@@ -286,7 +287,7 @@ func TestParseMatchNamespaces(t *testing.T) {
 	expected3 = append(expected3, expected2[:]...)
 	ns3 := []v1alpha1.NamespaceSelector{*ns1, *ns2}
 	ks := &KernelSelectorState{off: 0}
-	if err := parseMatchNamespaces(ks, ns3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
+	if err := ParseMatchNamespaces(ks, ns3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
 		t.Errorf("parseMatchNamespaces: error %v expected %v bytes %v parsing %v\n", err, expected3, ks.e[0:ks.off], ns3)
 	}
 }
@@ -298,7 +299,7 @@ func TestParseMatchNamespaceChanges(t *testing.T) {
 		0x05, 0x00, 0x00, 0x00, // op == In
 		0x05, 0x00, 0x00, 0x00, // values
 	}
-	if err := parseMatchNamespaceChange(k, ns1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchNamespaceChange(k, ns1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchNamespaceChange: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], ns1)
 	}
 }
@@ -312,7 +313,7 @@ func TestParseMatchCapabilities(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00, // IsNamespaceCapability = false
 		0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Values (uint64)
 	}
-	if err := parseMatchCaps(k, cap1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchCaps(k, cap1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchCaps: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], cap1)
 	}
 
@@ -324,7 +325,7 @@ func TestParseMatchCapabilities(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00, // IsNamespaceCapability = false
 		0x00, 0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, // Values (uint64)
 	}
-	if err := parseMatchCaps(k, cap2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
+	if err := ParseMatchCaps(k, cap2); err != nil || bytes.Equal(expected2, k.e[nextPid:k.off]) == false {
 		t.Errorf("parseMatchCaps: error %v expected %v bytes %v parsing %v\n", err, expected2, k.e[nextPid:k.off], cap2)
 	}
 
@@ -333,19 +334,22 @@ func TestParseMatchCapabilities(t *testing.T) {
 	expected3 = append(expected3, expected2[:]...)
 	cap3 := []v1alpha1.CapabilitiesSelector{*cap1, *cap2}
 	ks := &KernelSelectorState{off: 0}
-	if err := parseMatchCapabilities(ks, cap3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
+	if err := ParseMatchCapabilities(ks, cap3); err != nil || bytes.Equal(expected3, ks.e[0:ks.off]) == false {
 		t.Errorf("parseMatchCapabilities: error %v expected %v bytes %v parsing %v\n", err, expected3, ks.e[0:ks.off], cap3)
 	}
 }
 
 func TestParseMatchAction(t *testing.T) {
+	// Create URL and FQDN tables to store URLs and FQDNs for this kprobe
+	var actionArgTable idtable.Table
+
 	act1 := &v1alpha1.ActionSelector{Action: "post"}
 	act2 := &v1alpha1.ActionSelector{Action: "post"}
 	k := &KernelSelectorState{off: 0}
 	expected1 := []byte{
 		0x00, 0x00, 0x00, 0x00, // Action = "post"
 	}
-	if err := parseMatchAction(k, act1); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
+	if err := ParseMatchAction(k, act1, &actionArgTable); err != nil || bytes.Equal(expected1, k.e[0:k.off]) == false {
 		t.Errorf("parseMatchAction: error %v expected %v bytes %v parsing %v\n", err, expected1, k.e[0:k.off], act1)
 	}
 	// This is a bit contrived because we only have single action so far
@@ -360,13 +364,16 @@ func TestParseMatchAction(t *testing.T) {
 
 	act := []v1alpha1.ActionSelector{*act1, *act2}
 	ks := &KernelSelectorState{off: 0}
-	if err := parseMatchActions(ks, act); err != nil || bytes.Equal(expected, ks.e[0:ks.off]) == false {
+	if err := ParseMatchActions(ks, act, &actionArgTable); err != nil || bytes.Equal(expected, ks.e[0:ks.off]) == false {
 		t.Errorf("parseMatchActions: error %v expected %v bytes %v parsing %v\n", err, expected, ks.e[0:ks.off], act)
 	}
 }
 
 // NB(kkourt):
 func TestMultipleSelectorsExample(t *testing.T) {
+	// Create URL and FQDN tables to store URLs and FQDNs for this kprobe
+	var actionArgTable idtable.Table
+
 	args := []v1alpha1.KProbeArg{
 		{Index: 1, Type: "int", SizeArgIndex: 0, ReturnCopy: false},
 	}
@@ -381,7 +388,7 @@ func TestMultipleSelectorsExample(t *testing.T) {
 		{MatchArgs: matchArgs, MatchPIDs: pidSelector},
 		{MatchArgs: matchArgs, MatchPIDs: pidSelector},
 	}
-	b, _ := InitKernelSelectors(selectors, args)
+	b, _ := InitKernelSelectors(selectors, args, &actionArgTable)
 
 	expected := make([]byte, 4096)
 	expectedLen := 0
@@ -390,13 +397,13 @@ func TestMultipleSelectorsExample(t *testing.T) {
 		expectedLen += 4
 	}
 
-	// vaue               absolute offset    explanation
+	// value               absolute offset    explanation
 	expU32Push(2)               // off: 0       number of selectors
 	expU32Push(8)               // off: 4       relative ofset of 1st selector (4 + 8 = 12)
-	expU32Push(104)             // off: 8       relative ofset of 2nd selector (8 + 104 = 112)
-	expU32Push(100)             // off: 12      selector1: length (100 + 12 = 112)
+	expU32Push(80)              // off: 8       relative ofset of 2nd selector (8 + 80 = 88)
+	expU32Push(76)              // off: 12      selector1: length (76 + 12 = 112)
 	expU32Push(24)              // off: 16      selector1: MatchPIDs: len
-	expU32Push(selectorOpNotIn) // off: 20      selector1: MatchPIDs[0]: op
+	expU32Push(SelectorOpNotIn) // off: 20      selector1: MatchPIDs[0]: op
 	expU32Push(0)               // off: 24      selector1: MatchPIDs[0]: flags
 	expU32Push(2)               // off: 28      selector1: MatchPIDs[0]: number of values
 	expU32Push(33)              // off: 32      selector1: MatchPIDs[0]: val1
@@ -405,21 +412,15 @@ func TestMultipleSelectorsExample(t *testing.T) {
 	expU32Push(4)               // off: 44      selector1: MatchCapabilities: len
 	expU32Push(4)               // off: 48      selector1: MatchNamespaceChanges: len
 	expU32Push(4)               // off: 52      selector1: MatchCapabilityChanges: len
-	expU32Push(4 + 5*4)         // off: 56      selector1: matchBinaries: len
-	expU32Push(0)               // off: 60      selector1: matchBinaries: 0
-	expU32Push(0)               // off: 64      selector1: matchBinaries: 1
-	expU32Push(0)               // off: 68      selector1: matchBinaries: 2
-	expU32Push(0)               // off: 72      selector1: matchBinaries: 3
-	expU32Push(0)               // off: 76      selector1: matchBinaries: 4
 	expU32Push(28)              // off: 80      selector1: matchArgs: len
 	expU32Push(1)               // off: 84      selector1: matchArgs: arg0: index
-	expU32Push(selectorOpEQ)    // off: 88      selector1: matchArgs: arg0: operator
+	expU32Push(SelectorOpEQ)    // off: 88      selector1: matchArgs: arg0: operator
 	expU32Push(16)              // off: 92      selector1: matchArgs: arg0: len of vals
 	expU32Push(argTypeInt)      // off: 96      selector1: matchArgs: arg0: type
 	expU32Push(10)              // off: 100     selector1: matchArgs: arg0: val0: 10
 	expU32Push(20)              // off: 104     selector1: matchArgs: arg0: val1: 20
 	expU32Push(4)               // off: 108     selector1: matchActions: length
-	expU32Push(100)             // off: 112     selector2: length
+	expU32Push(76)              // off: 112     selector2: length
 	// ... everything else should be the same as selector1 ...
 
 	if bytes.Equal(expected[:expectedLen], b[:expectedLen]) == false {
@@ -436,11 +437,11 @@ func TestInitKernelSelectors(t *testing.T) {
 	}
 
 	expected_selsize_small := []byte{
-		0xfe, 0x00, 0x00, 0x00, // size = pids + binarys + args + actions + namespaces + capabilities  + 4
+		0xe6, 0x00, 0x00, 0x00, // size = pids + args + actions + namespaces + capabilities  + 4
 	}
 
 	expected_selsize_large := []byte{
-		0x1a, 0x01, 0x00, 0x00, // size = pids + binarys + args + actions + namespaces + namespacesChanges + capabilities + capabilityChanges + 4
+		0x02, 0x01, 0x00, 0x00, // size = pids + args + actions + namespaces + namespacesChanges + capabilities + capabilityChanges + 4
 	}
 
 	expected_filters := []byte{
@@ -524,17 +525,6 @@ func TestInitKernelSelectors(t *testing.T) {
 	}
 
 	expected_last := []byte{
-		// binaryNames header
-		24, 0x00, 0x00, 0x00, // size = sizeof(uint32) * 4
-
-		// binaryNames Ids, always has 4 to ease verify complexity and
-		// zeroes unused entries.
-		0x00, 0x00, 0x00, 0x00, // op
-		0x00, 0x00, 0x00, 0x00, // index0
-		0x00, 0x00, 0x00, 0x00, // index1
-		0x00, 0x00, 0x00, 0x00, // index2
-		0x00, 0x00, 0x00, 0x00, // index3
-
 		// arg header
 		54, 0x00, 0x00, 0x00, // size = sizeof(arg2) + sizeof(arg1) + 4
 
@@ -619,7 +609,11 @@ func TestInitKernelSelectors(t *testing.T) {
 		v1alpha1.KProbeArg{Index: 3, Type: "char_buf", SizeArgIndex: 0, ReturnCopy: false},
 		v1alpha1.KProbeArg{Index: 4, Type: "char_iovec", SizeArgIndex: 0, ReturnCopy: false},
 	}
-	b, _ := InitKernelSelectors(selectors, args)
+
+	// Create URL and FQDN tables to store URLs and FQDNs for this kprobe
+	var actionArgTable idtable.Table
+
+	b, _ := InitKernelSelectors(selectors, args, &actionArgTable)
 	if bytes.Equal(expected[0:len(expected)], b[0:len(expected)]) == false {
 		t.Errorf("InitKernelSelectors: expected %v bytes %v\n", expected, b[0:len(expected)])
 	}

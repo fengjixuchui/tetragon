@@ -50,6 +50,10 @@ type TracingPolicySpec struct {
 	Loader bool `json:"loader"`
 }
 
+func (tp *TracingPolicy) TpName() string {
+	return tp.ObjectMeta.Name
+}
+
 func (tp *TracingPolicy) TpSpec() *TracingPolicySpec {
 	return &tp.Spec
 }
@@ -99,7 +103,7 @@ type KProbeArg struct {
 }
 
 type BinarySelector struct {
-	// +kubebuilder:validation:Enum=In
+	// +kubebuilder:validation:Enum=In;NotIn
 	// Filter operation.
 	Operator string `json:"operator"`
 	// Value to compare the argument against.

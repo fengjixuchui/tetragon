@@ -1,9 +1,13 @@
 name: Tetragon e2e Test
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
 
 concurrency:
   group: ${{ github.ref }}
@@ -11,7 +15,7 @@ concurrency:
 
 env:
   clusterName: tetragon-ci
-  ciliumCliVersion: v0.11.11
+  ciliumCliVersion: v0.12.11
 
 jobs:
   e2e-test:
@@ -27,7 +31,7 @@ jobs:
         go-version: '1.18.3'
 
     - name: Checkout Code
-      uses: actions/checkout@755da8c3cf115ac066823e79a1e1788f8940201b
+      uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
       with:
         path: go/src/github.com/cilium/tetragon/
 
@@ -89,18 +93,11 @@ jobs:
         rm -rf "$TEMP"
         cilium version
 
-    - name: Create KinD Cluster
-      run: |
-        kind create cluster --name ${{ env.clusterName }}
-        kind load docker-image --name ${{ env.clusterName }} ${{ steps.vars.outputs.agentImage }}
-        kind load docker-image --name ${{ env.clusterName }} ${{ steps.vars.outputs.operatorImage }}
-        cilium install
-
     - name: Run e2e Tests
       run: |
         cd go/src/github.com/cilium/tetragon
 
-        make e2e-test E2E_BUILD_IMAGES=0 E2E_AGENT=${{ steps.vars.outputs.agentImage }} E2E_OPERATOR=${{ steps.vars.outputs.operatorImage }} EXTRA_TESTFLAGS="-tetragon.install-cilium=false -cluster-name=${{ env.clusterName }} -kubeconfig ~/.kube/config -args -v=4"
+        make e2e-test E2E_BUILD_IMAGES=0 E2E_AGENT=${{ steps.vars.outputs.agentImage }} E2E_OPERATOR=${{ steps.vars.outputs.operatorImage }} EXTRA_TESTFLAGS="-cluster-name=${{ env.clusterName }} -args -v=4"
 
     - name: Copy out e2e test logs
       if: ${{ failure() || cancelled() }}

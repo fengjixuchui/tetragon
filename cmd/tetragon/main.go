@@ -34,6 +34,7 @@ import (
 	"github.com/cilium/tetragon/pkg/option"
 	"github.com/cilium/tetragon/pkg/process"
 	"github.com/cilium/tetragon/pkg/ratelimit"
+	"github.com/cilium/tetragon/pkg/rthooks"
 	"github.com/cilium/tetragon/pkg/sensors"
 	"github.com/cilium/tetragon/pkg/sensors/base"
 	"github.com/cilium/tetragon/pkg/sensors/program"
@@ -41,6 +42,7 @@ import (
 	"github.com/cilium/tetragon/pkg/unixlisten"
 	"github.com/cilium/tetragon/pkg/version"
 	"github.com/cilium/tetragon/pkg/watcher"
+	k8sconf "github.com/cilium/tetragon/pkg/watcher/conf"
 	"github.com/cilium/tetragon/pkg/watcher/crd"
 
 	// Imported to allow sensors to be initialized inside init().
@@ -54,7 +56,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 var (
@@ -280,11 +281,14 @@ func tetragonExecute() error {
 	ctx, cancel2 := context.WithCancel(ctx)
 	defer cancel2()
 
+	hookRunner := rthooks.GlobalRunner().WithWatcher(watcher)
+
 	pm, err := tetragonGrpc.NewProcessManager(
 		ctx,
 		&cleanupWg,
 		ciliumState,
-		observer.SensorManager)
+		observer.SensorManager,
+		hookRunner)
 	if err != nil {
 		return err
 	}
@@ -319,7 +323,7 @@ func tetragonExecute() error {
 			return err
 		}
 
-		sens, err = sensors.GetMergedSensorFromParserPolicy(cnf.Name(), &cnf.Spec)
+		sens, err = sensors.GetMergedSensorFromParserPolicy(cnf.TpName(), &cnf.Spec)
 		if err != nil {
 			return err
 		}
@@ -331,22 +335,23 @@ func tetragonExecute() error {
 		}
 	}
 
-	// Periodically log status
-	go logStatus(ctx, obs)
+	// k8s should have metrics, so periodically log only in a non k8s
+	if option.Config.EnableK8s == false {
+		go logStatus(ctx, obs)
+	}
 
 	return obs.Start(ctx)
 }
 
-// Periodically log current status every 1 hour. For lost or error
-// events we ratelimit statistics to 1 message per every 5mins to
-// continuously infor users that events are being lost without
-// polluting logs.
+// Periodically log current status every 24 hours. For lost or error
+// events we ratelimit statistics to 1 message per every 1hour and
+// only if they increase, to inform users that events are being lost.
 func logStatus(ctx context.Context, obs *observer.Observer) {
 	prevLost := uint64(0)
 	prevErrors := uint64(0)
-	lostTicker := time.NewTicker(5 * time.Minute)
+	lostTicker := time.NewTicker(1 * time.Hour)
 	defer lostTicker.Stop()
-	logTicker := time.NewTicker(1 * time.Hour)
+	logTicker := time.NewTicker(24 * time.Hour)
 	defer logTicker.Stop()
 	for {
 		select {
@@ -355,7 +360,7 @@ func logStatus(ctx context.Context, obs *observer.Observer) {
 		case <-logTicker.C:
 			// We always print stats
 			obs.PrintStats()
-			// Update lost and errors, to not print two consecutive lines at same time
+			// Update lost and errors
 			prevLost = obs.ReadLostEvents()
 			prevErrors = obs.ReadErrorEvents()
 		case <-lostTicker.C:
@@ -485,17 +490,22 @@ func Serve(ctx context.Context, listenAddr string, server *server.Server) error 
 			log.WithError(err).Error("Failed to close gRPC server")
 		}
 	}(proto, addr)
-	go func() {
+	go func(proto, addr string) {
 		<-ctx.Done()
 		grpcServer.Stop()
-	}()
+		// if proto is unix, ListenWithRename() creates the socket
+		// then renames it, so explicitly clean it up.
+		if proto == "unix" {
+			os.Remove(addr)
+		}
+	}(proto, addr)
 	return nil
 }
 
 func getWatcher() (watcher.K8sResourceWatcher, error) {
 	if option.Config.EnableK8s {
 		log.Info("Enabling Kubernetes API")
-		config, err := rest.InClusterConfig()
+		config, err := k8sconf.K8sConfig()
 		if err != nil {
 			return nil, err
 		}
@@ -568,6 +578,7 @@ func execute() error {
 	flags.String(keyLogLevel, "info", "Set log level")
 	flags.String(keyLogFormat, "text", "Set log format")
 	flags.Bool(keyEnableK8sAPI, false, "Access Kubernetes API to associate Tetragon events with Kubernetes pods")
+	flags.String(keyK8sKubeConfigPath, "", "Absolute path of the kubernetes kubeconfig file")
 	flags.Bool(keyEnableCiliumAPI, false, "Access Cilium API to associate Tetragon events with Cilium endpoints and DNS cache")
 	flags.Bool(keyEnableProcessAncestors, true, "Include ancestors in process exec events")
 	flags.String(keyMetricsServer, "", "Metrics server address (e.g. ':2112'). Disabled by default")

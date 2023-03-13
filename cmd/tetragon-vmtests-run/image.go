@@ -98,15 +98,23 @@ func buildTesterService(rcnf *RunConf, tmpDir string) ([]images.Action, error) {
 }
 
 func buildTesterActions(rcnf *RunConf, tmpDir string) ([]images.Action, error) {
+	absTesterBin, err := filepath.Abs(TetragonTesterBin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tetragon-tester full path: %w", err)
+	}
 	ret := []images.Action{
-		{Op: &images.CopyInCommand{LocalPath: TetragonTesterBin, RemoteDir: "/sbin/"}},
+		{Op: &images.CopyInCommand{LocalPath: absTesterBin, RemoteDir: "/sbin/"}},
 	}
 
 	// NB: need to do this before we marshal the configuration
 	if rcnf.btfFile != "" {
+		absBtfFile, err := filepath.Abs(rcnf.btfFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get btf file full path: %w", err)
+		}
 		ret = append(ret, images.Action{
 			Op: &images.CopyInCommand{
-				LocalPath: rcnf.btfFile,
+				LocalPath: absBtfFile,
 				RemoteDir: "/boot/",
 			},
 		})
@@ -141,6 +149,53 @@ func buildTesterActions(rcnf *RunConf, tmpDir string) ([]images.Action, error) {
 	return ret, nil
 }
 
+var networkConf = `
+[Match]
+Name=ens* enp* eth*
+[Network]
+DHCP=yes
+`
+
+func buildNetActions(rcnf *RunConf, tmpDir string) ([]images.Action, error) {
+	ret := []images.Action{
+		// Allow easy login for root user from ssh
+		{Op: &images.AppendLineCommand{
+			File: "/etc/ssh/sshd_config",
+			Line: "PermitRootLogin yes",
+		}},
+		{Op: &images.AppendLineCommand{
+			File: "/etc/ssh/sshd_config",
+			Line: "PermitEmptyPasswords yes",
+		}},
+	}
+
+	var b bytes.Buffer
+	b.WriteString(networkConf)
+	base := "20-interfaces.network"
+	tmpFile := filepath.Join(tmpDir, base)
+	err := os.WriteFile(tmpFile, b.Bytes(), 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	dstDir := "/etc/systemd/network"
+	ret = append(ret,
+		images.Action{Op: &images.CopyInCommand{
+			LocalPath: tmpFile,
+			RemoteDir: dstDir,
+		}},
+		images.Action{Op: &images.ChmodCommand{
+			File:        filepath.Join(dstDir, base),
+			Permissions: "0644",
+		}},
+		images.Action{Op: &images.RunCommand{
+			Cmd: "systemctl enable systemd-networkd.service",
+		}},
+	)
+
+	return ret, nil
+}
+
 func buildTestImage(log *logrus.Logger, rcnf *RunConf) error {
 
 	imagesDir, baseImage := filepath.Split(rcnf.baseFname)
@@ -162,6 +217,11 @@ func buildTestImage(log *logrus.Logger, rcnf *RunConf) error {
 		return err
 	}
 
+	netActions, err := buildNetActions(rcnf, tmpDir)
+	if err != nil {
+		return err
+	}
+
 	actions := []images.Action{
 		{Op: &images.SetHostnameCommand{Hostname: hostname}},
 		{Op: &images.AppendLineCommand{
@@ -171,6 +231,7 @@ func buildTestImage(log *logrus.Logger, rcnf *RunConf) error {
 	}
 	actions = append(actions, fsActions...)
 	actions = append(actions, testerActions...)
+	actions = append(actions, netActions...)
 
 	cnf := images.ImagesConf{
 		Dir: imagesDir,

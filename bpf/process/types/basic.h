@@ -83,12 +83,6 @@ struct selector_action {
 	__u32 act[];
 };
 
-struct selector_binary_filter {
-	__u32 arglen;
-	__u32 op;
-	__u32 index[4];
-};
-
 struct selector_arg_filter {
 	__u32 arglen;
 	__u32 index;
@@ -119,6 +113,11 @@ struct event_config {
 	__u32 syscall;
 	__s32 argreturncopy;
 	__s32 argreturn;
+	/* policy id identifies the policy of this generic hook and is used to
+	 * apply policies only on certain processes. A value of 0 indicates
+	 * that the hook always applies and no check will be performed.
+	 */
+	__u32 policy_id;
 } __attribute__((packed));
 
 #define MAX_ARGS_SIZE	 80
@@ -295,10 +294,10 @@ parse_iovec_array(long off, unsigned long arg, int i, unsigned long max,
 			     : "c2", "r0");               \
 		if (c1 != c2)                             \
 			goto failed;                      \
-		n1--;                                     \
-		n2--;                                     \
 		if (n1 < 1 || n2 < 1)                     \
 			goto accept;                      \
+		n1--;                                     \
+		n2--;                                     \
 	}
 
 #define ASM_RCMP5        \
@@ -323,6 +322,7 @@ parse_iovec_array(long off, unsigned long arg, int i, unsigned long max,
 		ASM_RCMP20 \
 		ASM_RCMP20 \
 		ASM_RCMP5  \
+		ASM_RCMP5  \
 	}
 
 #define ASM_RCMP100        \
@@ -331,6 +331,7 @@ parse_iovec_array(long off, unsigned long arg, int i, unsigned long max,
 		ASM_RCMP50 \
 	}
 
+/* reverse compare bytes. n1 is index of last byte in s1. Ditto n2 of s2. */
 static inline __attribute__((always_inline)) int rcmpbytes(char *s1, char *s2,
 							   u64 n1, u64 n2)
 {
@@ -348,13 +349,16 @@ failed:
 	return -1;
 }
 
+/* compare bytes. n is number of bytes to compare. */
 static inline __attribute__((always_inline)) int cmpbytes(char *s1, char *s2,
 							  size_t n)
 {
 	int i;
 #pragma unroll
 	for (i = 0; i < MAX_STRING_FILTER; i++) {
-		if (i < n && s1[i] != s2[i])
+		if (i >= n)
+			return 0;
+		if (s1[i] != s2[i])
 			return -1;
 	}
 	return 0;
@@ -540,7 +544,7 @@ copy_char_buf(void *ctx, long off, unsigned long arg, int argm,
 }
 
 static inline __attribute__((always_inline)) long
-filter_char_buf(struct selector_arg_filter *filter, char *args)
+filter_char_buf(struct selector_arg_filter *filter, char *args, int value_off)
 {
 	char *value = (char *)&filter->value;
 	long i, j = 0;
@@ -548,7 +552,7 @@ filter_char_buf(struct selector_arg_filter *filter, char *args)
 #pragma unroll
 	for (i = 0; i < MAX_MATCH_STRING_VALUES; i++) {
 		__u32 length;
-		int err, v, a, postoff = 0;
+		int err, a, postoff = 0;
 
 		/* filter->vallen is pulled from user input so we also need to
 		 * ensure its bounded.
@@ -556,12 +560,12 @@ filter_char_buf(struct selector_arg_filter *filter, char *args)
 		asm volatile("%[j] &= 0xff;\n" ::[j] "+r"(j)
 			     :);
 		length = *(__u32 *)&value[j];
-		asm volatile("%[length] &= 0x3f;\n" ::[length] "+r"(length)
+		asm volatile("%[length] &= 0xff;\n" ::[length] "+r"(length)
 			     :);
-		v = (int)value[j];
-		a = (int)args[0];
+		// arg length is 4 bytes before the value data
+		a = *(int *)&args[value_off - 4];
 		if (filter->op == op_filter_eq) {
-			if (v != a)
+			if (length != a)
 				goto skip_string;
 		} else if (filter->op == op_filter_str_postfix) {
 			postoff = a - length;
@@ -576,7 +580,7 @@ filter_char_buf(struct selector_arg_filter *filter, char *args)
 		 */
 		asm volatile("%[j] &= 0xff;\n" ::[j] "+r"(j)
 			     :);
-		err = cmpbytes(&value[j + 4], &args[4 + postoff], length);
+		err = cmpbytes(&value[j + 4], &args[value_off + postoff], length);
 		if (!err)
 			return 1;
 	skip_string:
@@ -598,6 +602,11 @@ __filter_file_buf(char *value, char *args, __u32 op)
 	 */
 	v = (unsigned int)value[0];
 	a = (unsigned int)args[0];
+	/* There are cases where file pointer may not contain a path.
+	 * An example is using an unnamed pipe. This is not a match.
+	 */
+	if (a == 0)
+		goto skip_string;
 	if (op == op_filter_eq) {
 		if (v != a)
 			goto skip_string;
@@ -605,14 +614,12 @@ __filter_file_buf(char *value, char *args, __u32 op)
 		if (a < v)
 			goto skip_string;
 	} else if (op == op_filter_str_postfix) {
-		/* Due to the lack of followfd we get a kprobe with empty path. This is not a match */
-		if (a == 0)
-			goto skip_string;
 		err = rcmpbytes(&value[4], &args[4], v - 1, a - 1);
 		if (!err)
 			return 0;
+		goto skip_string;
 	}
-	err = cmpbytes(&value[4], &args[4], v - 1);
+	err = cmpbytes(&value[4], &args[4], v);
 	if (!err)
 		return 0;
 skip_string:
@@ -928,14 +935,33 @@ static inline __attribute__((always_inline)) size_t type_to_min_size(int type,
 
 #define INDEX_MASK 0x3ff
 
+/*
+ * For matchBinaries we use two maps:
+ * 1. names_map: global (for all sensors) keeps a mapping from names -> ids
+ * 2. sel_names_map: per-sensor: keeps a mapping from id -> selector val
+ *
+ * At exec time, we check names_map and set ->binary in execve_map equal to
+ * the id stored in names_map. Assuming the binary name exists in the map,
+ * otherwise binary is 0.
+ *
+ * When we check the selectors, use ->binary to index sel_names_map and decide
+ * whether the selector matches or not.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 256);
+	__type(key, __u32);
+	__type(value, __u32);
+} sel_names_map SEC(".maps");
+
 static inline __attribute__((always_inline)) int
 selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
 {
 	struct selector_arg_filter *filter;
-	struct selector_binary_filter *binary;
 	long seloff, argoff, pass;
-	__u32 index;
+	__u32 index, *op;
 	char *args;
+	__u32 max = 0xffffffff; // UINT32_MAX
 
 	seloff = 4; /* start of the relative offsets */
 	seloff += (selidx * 4); /* relative offset for this selector */
@@ -956,42 +982,37 @@ selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
 	/* skip the matchCapabilityChanges by reading its length */
 	seloff += *(__u32 *)((__u64)f + (seloff & INDEX_MASK));
 
-	/* seloff must leave space for verifier to walk strings
-	 * so we set inside 4k maximum. Advance to binary matches.
-	 */
-	seloff &= INDEX_MASK;
-	binary = (struct selector_binary_filter *)&f[seloff];
-
-	/* Run binary name filters
-	 */
-	if (binary->op == op_filter_in) {
+	op = map_lookup_elem(&sel_names_map, &max);
+	if (op) {
 		struct execve_map_value *execve;
 		bool walker = 0;
-		__u32 ppid;
+		__u32 ppid, bin_key, *bin_val;
 
 		execve = event_find_curr(&ppid, &walker);
 		if (!execve)
 			return 0;
-		if (binary->index[0] != execve->binary &&
-		    binary->index[1] != execve->binary &&
-		    binary->index[2] != execve->binary &&
-		    binary->index[3] != execve->binary)
-			return 0;
-	}
 
-	/* Advance to matchArgs we use fixed size binary filters for now. It helps
-	 * the verifier and its still unclear how many entries are needed. At any
-	 * rate each entry is a uint32 now and we should really be able to pack
-	 * an entry into a byte which would give us 4x more entries.
-	 */
-	seloff += sizeof(struct selector_binary_filter);
-	if (seloff > 3800) {
-		return 0;
+		bin_key = execve->binary;
+		bin_val = map_lookup_elem(&sel_names_map, &bin_key);
+
+		/*
+		 * The following things may happen:
+		 * binary is not part of names_map, execve_map->binary will be `0` and `bin_val` will always be `0`
+		 * binary is part of `names_map`:
+		 *  if binary is not part of this selector, bin_val will be`0`
+		 *  if binary is part of this selector: `bin_val will be `!0`
+		 */
+		if (*op == op_filter_in) {
+			if (!bin_val)
+				return 0;
+		} else if (*op == op_filter_notin) {
+			if (bin_val)
+				return 0;
+		}
 	}
 
 	/* Making binary selectors fixes size helps on some kernels */
-	asm volatile("%[seloff] &= 0xfff;\n" ::[seloff] "+r"(seloff)
-		     :);
+	seloff &= INDEX_MASK;
 	filter = (struct selector_arg_filter *)&f[seloff];
 
 	if (filter->arglen <= 4) // no filters
@@ -1004,7 +1025,7 @@ selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
 	asm volatile("%[index] &= 0x7;\n" ::[index] "+r"(index)
 		     :);
 	argoff = e->argsoff[index];
-	asm volatile("%[argoff] &= 0xeff;\n" ::[argoff] "+r"(argoff)
+	asm volatile("%[argoff] &= 0x7ff;\n" ::[argoff] "+r"(argoff)
 		     :);
 	args = &e->args[argoff];
 
@@ -1016,8 +1037,14 @@ selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
 		pass = filter_file_buf(filter, args);
 		break;
 	case string_type:
+		/* for strings, we just encode the length */
+		pass = filter_char_buf(filter, args, 4);
+		break;
 	case char_buf:
-		pass = filter_char_buf(filter, args);
+		/* for buffers, we just encode the expected length and the
+		 * length that was actually read (see: __copy_char_buf)
+		 */
+		pass = filter_char_buf(filter, args, 8);
 		break;
 	case s64_ty:
 	case u64_ty:
@@ -1109,7 +1136,7 @@ installfd(struct msg_generic_kprobe *e, int fd, int name, bool follow)
 		return 0;
 	}
 	fdoff = e->argsoff[fd];
-	asm volatile("%[fdoff] &= 0xeff;\n"
+	asm volatile("%[fdoff] &= 0x7ff;\n"
 		     : [fdoff] "+r"(fdoff)
 		     :);
 	key.pad = 0;
@@ -1125,7 +1152,7 @@ installfd(struct msg_generic_kprobe *e, int fd, int name, bool follow)
 		if (name > 5)
 			return 0;
 		nameoff = e->argsoff[name];
-		asm volatile("%[nameoff] &= 0xeff;\n"
+		asm volatile("%[nameoff] &= 0x7ff;\n"
 			     : [nameoff] "+r"(nameoff)
 			     :);
 
@@ -1157,7 +1184,7 @@ copyfd(struct msg_generic_kprobe *e, int oldfd, int newfd)
 	if (oldfd > 5)
 		return 0;
 	oldfdoff = e->argsoff[oldfd];
-	asm volatile("%[oldfdoff] &= 0xeff;\n"
+	asm volatile("%[oldfdoff] &= 0x7ff;\n"
 		     : [oldfdoff] "+r"(oldfdoff)
 		     :);
 	key.pad = 0;
@@ -1172,7 +1199,7 @@ copyfd(struct msg_generic_kprobe *e, int oldfd, int newfd)
 		if (newfd > 5)
 			return 0;
 		newfdoff = e->argsoff[newfd];
-		asm volatile("%[newfdoff] &= 0xeff;\n"
+		asm volatile("%[newfdoff] &= 0x7ff;\n"
 			     : [newfdoff] "+r"(newfdoff)
 			     :);
 		key.pad = 0;
@@ -1246,6 +1273,11 @@ __do_action(long i, struct msg_generic_kprobe *e,
 		else
 			map_update_elem(override_tasks, &id, &error, BPF_ANY);
 		break;
+	case ACTION_GETURL:
+	case ACTION_DNSLOOKUP:
+		/* Set the URL or DNS action */
+		e->action_arg_id = actions->act[++i];
+		break;
 	default:
 		break;
 	}
@@ -1310,13 +1342,13 @@ filter_read_arg(void *ctx, int index, struct bpf_map_def *heap,
 		if (f) {
 			bool postit;
 
-			asm volatile("%[pass] &= 0xeff;\n"
+			asm volatile("%[pass] &= 0x7ff;\n"
 				     : [pass] "+r"(pass)
 				     :);
 			arg = (struct selector_arg_filter *)&f[pass];
 
 			actoff = pass + arg->arglen;
-			asm volatile("%[actoff] &= 0xeff;\n"
+			asm volatile("%[actoff] &= 0x7ff;\n"
 				     : [actoff] "+r"(actoff)
 				     :);
 			actions = (struct selector_action *)&f[actoff];

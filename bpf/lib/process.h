@@ -104,6 +104,12 @@
 #define __ASM_ARGSBUFFER 976
 #define ARGSBUFFERMASK	 (ARGSBUFFER - 1)
 #define MAXARGMASK	 (MAXARG - 1)
+#define PATHNAME_SIZE	 256
+
+/* Task flags */
+#ifndef PF_KTHREAD
+#define PF_KTHREAD 0x00200000 /* I am a kernel thread */
+#endif
 
 /* Msg flags */
 #define EVENT_UNKNOWN		      0x00
@@ -276,6 +282,7 @@ struct execve_map_value {
 	__u32 nspid;
 	__u32 binary;
 	__u32 pad;
+	__u64 cgrpid_tracker; /* Pinned Cgroup ID Tracker */
 	struct msg_ns ns;
 	struct msg_capabilities caps;
 } __attribute__((packed)) __attribute__((aligned(8)));
@@ -310,7 +317,7 @@ struct {
 
 struct execve_heap {
 	union {
-		char pathname[256];
+		char pathname[PATHNAME_SIZE];
 		char maxpath[4096];
 	};
 };

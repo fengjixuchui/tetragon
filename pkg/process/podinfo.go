@@ -4,12 +4,12 @@
 package process
 
 import (
-	hubblev1 "github.com/cilium/hubble/pkg/api/v1"
 	"github.com/cilium/tetragon/api/v1/tetragon"
 	"github.com/cilium/tetragon/pkg/cilium"
 	"github.com/cilium/tetragon/pkg/filters"
 	"github.com/cilium/tetragon/pkg/logger"
 	"github.com/cilium/tetragon/pkg/metrics/watchermetrics"
+	hubblev1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
 	"github.com/cilium/tetragon/pkg/watcher"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -43,7 +43,7 @@ func getPodInfo(
 	if containerID == "" {
 		return nil, nil
 	}
-	pod, container, ok := w.FindPod(containerID)
+	pod, container, ok := w.FindContainer(containerID)
 	if !ok {
 		watchermetrics.GetWatcherErrors("k8s", watchermetrics.FailedToGetPodError).Inc()
 		logger.GetLogger().WithField("container id", containerID).Trace("failed to get pod")
@@ -64,7 +64,7 @@ func getPodInfo(
 		labels = endpoint.Labels
 	}
 
-	// Don't set container PIDs if it's zero.
+	// This is the PID inside the container. Don't set it if zero.
 	var containerPID *wrapperspb.UInt32Value
 	if nspid > 0 {
 		containerPID = &wrapperspb.UInt32Value{

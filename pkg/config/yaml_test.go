@@ -26,7 +26,7 @@ metadata:
   name: "sys-write"
 spec:
   kprobes:
-  - call: "__x64_sys_write"
+  - call: "sys_write"
     return: false
     syscall: true
     args:
@@ -93,7 +93,7 @@ var expectedWrite = GenericTracingConf{
 	Spec: v1alpha1.TracingPolicySpec{
 		KProbes: []v1alpha1.KProbeSpec{
 			{
-				Call:    "__x64_sys_write",
+				Call:    "sys_write",
 				Return:  false,
 				Syscall: true,
 				Args: []v1alpha1.KProbeArg{
@@ -443,7 +443,7 @@ func fileConfigWithTemplate(fileName string, data interface{}) (*GenericTracingC
 
 func TestExamplesSmoke(t *testing.T) {
 	_, filename, _, _ := runtime.Caller(0)
-	examplesDir := filepath.Join(filepath.Dir(filename), "../../crds/examples")
+	examplesDir := filepath.Join(filepath.Dir(filename), "../../examples/tracingpolicy")
 	err := filepath.Walk(examplesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
