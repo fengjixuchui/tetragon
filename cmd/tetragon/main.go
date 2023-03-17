@@ -96,23 +96,6 @@ func saveInitInfo() error {
 	return bugtool.SaveInitInfo(&info)
 }
 
-func readConfig(file string) (*config.GenericTracingConf, error) {
-	if file == "" {
-		return nil, nil
-	}
-
-	yamlData, err := os.ReadFile(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read yaml file %s: %w", configFile, err)
-	}
-	cnf, err := config.ReadConfigYaml(string(yamlData))
-	if err != nil {
-		return nil, err
-	}
-
-	return cnf, nil
-}
-
 func stopProfile() {
 	if memProfile != "" {
 		log.WithField("file", memProfile).Info("Stopping mem profiling")
@@ -253,6 +236,9 @@ func tetragonExecute() error {
 		go metrics.EnableMetrics(metricsServer)
 	}
 
+	// Probe runtime configuration and do not fail on errors
+	obs.UpdateRuntimeConf(option.Config.MapDir)
+
 	watcher, err := getWatcher()
 	if err != nil {
 		return err
@@ -318,12 +304,12 @@ func tetragonExecute() error {
 	// load sensor from configuration file
 	if len(configFile) > 0 {
 		var sens *sensors.Sensor
-		cnf, err := readConfig(configFile)
+		tp, err := config.PolicyFromYamlFilename(configFile)
 		if err != nil {
 			return err
 		}
 
-		sens, err = sensors.GetMergedSensorFromParserPolicy(cnf.TpName(), &cnf.Spec)
+		sens, err = sensors.GetMergedSensorFromParserPolicy(tp)
 		if err != nil {
 			return err
 		}
@@ -628,6 +614,10 @@ func execute() error {
 	// observer dir on startup. Useful for doing upgrades/downgrades. Set to false to
 	// disable.
 	flags.Bool(keyReleasePinnedBPF, true, "Release all pinned BPF programs and maps in Tetragon BPF directory. Enabled by default. Set to false to disable")
+
+	// Provide option to enable policy filtering. Because the code is new,
+	// this is set to false by default.
+	flags.Bool(keyEnablePolicyFilter, false, "Enable policy (beta) filter code")
 
 	viper.BindPFlags(flags)
 	return rootCmd.Execute()

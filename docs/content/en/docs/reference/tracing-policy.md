@@ -52,10 +52,10 @@ spec:
     selectors:
     - matchArgs:
       - index: 1
-      operator: "Equal"
-      values:
-      - "/etc/passwd"
-      - "/etc/shadow"
+        operator: "Equal"
+        values:
+        - "/etc/passwd"
+        - "/etc/shadow"
 ```
 
 **First required fields**
@@ -217,10 +217,10 @@ is of type `file`.
 selectors:
 - matchArgs:
   - index: 1
-  operator: "Equal"
-  values:
-  - "/etc/passwd"
-  - "/etc/shadow"
+    operator: "Equal"
+    values:
+    - "/etc/passwd"
+    - "/etc/shadow"
 ```
 
 The available operators for `matchArgs` are:
@@ -237,9 +237,9 @@ In the previous example, we used the operator `Equal`, but we can also use the
 selectors:
 - matchArgs:
   - index: 1
-  operator: "Prefix"
-  values:
-  - "/etc"
+    operator: "Prefix"
+    values:
+    - "/etc"
 ```
 In this situation, an event will be created every time a process tries to
 access a file under `/etc`.
@@ -615,9 +615,15 @@ This will match if: [`Effective` capabilities contain `CAP_CHOWN`] OR
 
 Namespace changes filter can be specified under the `matchNamespaceChanges`
 field and provide filtering based on calls that are changing Linux namespaces.
-This filter can be especially useful to track container escape or execution of
-code in a new namespace, for example using user namespace to exploit root-only
-kernel features.
+This filter can be useful to track execution of code in a new namespace or even
+container escapes that change their namespaces.
+
+For instance, if an unprivileged process creates a new user namespace, it gains
+full privileges within that namespace. This grants the process the ability to
+perform some privileged operations within the context of this new namespace
+that would otherwise only be available to privileged root user. As a result, such
+filter is useful to track namespace creation, which can be abused by untrusted
+processes.
 
 To keep track of the changes, when a `process_exec` happens, the namespaces of
 the process are recorded and these are compared with the current namespaces on
@@ -632,14 +638,13 @@ matchNamespaceChanges:
 
 The `unshare` command, or executing in the host namespace using `nsenter` can
 be used to test this feature. See a
-[demonstration example](https://github.com/cilium/tetragon/main/examples/tracingpolicy/match_namespace_changes.yaml)
+[demonstration example](https://github.com/cilium/tetragon/blob/main/examples/tracingpolicy/match_namespace_changes.yaml)
 of this feature.
 
 #### Capability changes filter
 
 Capability changes filter can be specified under the `matchCapabilityChanges`
 field and provide filtering based on calls that are changing Linux capabilities.
-This filter can be especially useful to detect privilege escalation.
 
 To keep track of the changes, when a `process_exec` happens, the capabilities
 of the process are recorded and these are compared with the current
@@ -654,7 +659,7 @@ matchCapabilityChanges:
   - "CAP_SETUID"
 ```
 
-See a [demonstration example](https://github.com/cilium/tetragon/main/examples/tracingpolicy/match_capability_changes.yaml)
+See a [demonstration example](https://github.com/cilium/tetragon/blob/main/examples/tracingpolicy/match_capability_changes.yaml)
 of this feature.
 
 #### Actions filter
