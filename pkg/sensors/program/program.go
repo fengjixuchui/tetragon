@@ -40,6 +40,16 @@ type MapLoad struct {
 	Load  func(m *ebpf.Map, index uint32) error
 }
 
+type MultiKprobeAttachData struct {
+	Symbols []string
+	Cookies []uint64
+}
+
+type UprobeAttachData struct {
+	Path   string
+	Symbol string
+}
+
 // Program reprents a BPF program.
 type Program struct {
 	// Name is the name of the BPF object file.
@@ -71,6 +81,9 @@ type Program struct {
 	// LoaderData represents per-type specific fields.
 	LoaderData interface{}
 
+	// AttachData represents specific data for attaching probe
+	AttachData interface{}
+
 	MapLoad []*MapLoad
 
 	// unloader for the program. nil if not loaded.
@@ -81,9 +94,6 @@ type Program struct {
 
 	// available when program.KeepCollection is true
 	LC *LoadedCollection
-
-	MultiSymbols []string
-	MultiCookies []uint64
 }
 
 func (p *Program) SetRetProbe(ret bool) *Program {
@@ -93,6 +103,11 @@ func (p *Program) SetRetProbe(ret bool) *Program {
 
 func (p *Program) SetLoaderData(d interface{}) *Program {
 	p.LoaderData = d
+	return p
+}
+
+func (p *Program) SetAttachData(d interface{}) *Program {
+	p.AttachData = d
 	return p
 }
 
