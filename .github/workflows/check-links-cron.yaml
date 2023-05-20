@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab
         with:
           fetch-depth: 0         # Fetch all history for .GitInfo and .Lastmod
 
@@ -47,7 +47,7 @@ jobs:
 
       - name: Close automated issue
         if: env.lychee_exit_code == 0 && steps.search-issue.outputs.issue_number != ''
-        uses: peter-evans/close-issue@1373cadf1f0c96c1420bc000cfba2273ea307fd1
+        uses: peter-evans/close-issue@276d7966e389d888f011539a86c8920025ea0626
         with:
           issue-number: ${{ steps.search-issue.outputs.issue_number }}
           comment: '[Periodic links check](https://github.com/cilium/tetragon/actions/workflows/check-links-cron.yaml) no longer finds broken links, closing issue.'

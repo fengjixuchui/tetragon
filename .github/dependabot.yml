@@ -13,7 +13,7 @@ updates:
       - dependency-name: "k8s.io/*"
       - dependency-name: "sigs.k8s.io/*"
     labels:
-    - enhancement
+    - kind/enhancement
     - release-blocker
 
   - package-ecosystem: github-actions
@@ -23,7 +23,7 @@ updates:
     open-pull-requests-limit: 1
     rebase-strategy: disabled
     labels:
-    - enhancement
+    - kind/enhancement
     - release-blocker
 
   - package-ecosystem: docker
@@ -32,6 +32,12 @@ updates:
       interval: daily
     open-pull-requests-limit: 1
     rebase-strategy: disabled
+    ignore:
+      # latest was outdated and it caused an update to an older version
+      # https://github.com/cilium/tetragon/pull/909#pullrequestreview-1378642231
+      - dependency-name: "cilium/alpine-curl"
+        versions:
+          - "latest"
     labels:
-    - enhancement
+    - kind/enhancement
     - release-blocker

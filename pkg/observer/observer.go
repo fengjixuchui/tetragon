@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,7 +120,7 @@ func HandlePerfData(data []byte) (byte, []Event, error) {
 	return op, events, err
 }
 
-func (k *Observer) receiveEvent(data []byte, cpu int) {
+func (k *Observer) receiveEvent(data []byte) {
 	atomic.AddUint64(&k.recvCntr, 1)
 	op, events, err := HandlePerfData(data)
 	opcodemetrics.OpTotalInc(int(op))
@@ -216,7 +217,7 @@ func (k *Observer) runEvents(stopCtx context.Context, ready func()) error {
 				}
 			} else {
 				if len(record.RawSample) > 0 {
-					k.receiveEvent(record.RawSample, record.CPU)
+					k.receiveEvent(record.RawSample)
 					ringbufmetrics.ReceivedSet(float64(k.ReadReceivedEvents()))
 				}
 
@@ -227,6 +228,12 @@ func (k *Observer) runEvents(stopCtx context.Context, ready func()) error {
 			}
 		}
 		k.log.WithError(stopCtx.Err()).Info("Listening for events completed.")
+	}()
+
+	// Loading default program consumes some memory lets kick GC to give
+	// this back to the OS (K8s).
+	go func() {
+		runtime.GC()
 	}()
 
 	// Wait for context to be cancelled and then stop.
@@ -291,10 +298,10 @@ func (k *Observer) Start(ctx context.Context) error {
 	return nil
 }
 
-// InitSensorManager starts the sensor controller and stt manager.
-func (k *Observer) InitSensorManager() error {
+// InitSensorManager starts the sensor controller
+func (k *Observer) InitSensorManager(waitChan chan struct{}) error {
 	var err error
-	SensorManager, err = sensors.StartSensorManager(option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir)
+	SensorManager, err = sensors.StartSensorManager(option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir, waitChan)
 	return err
 }
 
@@ -333,7 +340,10 @@ func (k *Observer) PrintStats() {
 	recvCntr := k.ReadReceivedEvents()
 	lostCntr := k.ReadLostEvents()
 	total := float64(recvCntr + lostCntr)
-	loss := (float64(lostCntr) * 100.0) / total
+	loss := float64(0)
+	if total > 0 {
+		loss = (float64(lostCntr) * 100.0) / total
+	}
 	k.log.Infof("BPF events statistics: %d received, %.2g%% events loss", recvCntr, loss)
 
 	k.log.WithFields(logrus.Fields{

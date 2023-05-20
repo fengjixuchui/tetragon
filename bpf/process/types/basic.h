@@ -15,6 +15,8 @@
 #include "user_namespace.h"
 #include "capabilities.h"
 #include "../argfilter_maps.h"
+#include "common.h"
+#include "process/data_event.h"
 
 /* Type IDs form API with user space generickprobe.go */
 enum {
@@ -72,6 +74,8 @@ enum {
 	ACTION_COPYFD = 5,
 	ACTION_GETURL = 6,
 	ACTION_DNSLOOKUP = 7,
+	ACTION_NOPOST = 8,
+	ACTION_SIGNAL = 9,
 };
 
 enum {
@@ -84,13 +88,19 @@ struct selector_action {
 };
 
 struct selector_arg_filter {
-	__u32 arglen;
 	__u32 index;
 	__u32 op;
 	__u32 vallen;
 	__u32 type;
 	__u8 value;
 } __attribute__((packed));
+
+struct selector_arg_filters {
+	__u32 arglen;
+	__u32 argoff[5];
+} __attribute__((packed));
+
+#define FLAGS_EARLY_FILTER BIT(0)
 
 struct event_config {
 	__u32 func_id;
@@ -109,7 +119,6 @@ struct event_config {
 	__u32 t_arg2_ctx_off;
 	__u32 t_arg3_ctx_off;
 	__u32 t_arg4_ctx_off;
-	__u32 sigkill;
 	__u32 syscall;
 	__s32 argreturncopy;
 	__s32 argreturn;
@@ -118,6 +127,7 @@ struct event_config {
 	 * that the hook always applies and no check will be performed.
 	 */
 	__u32 policy_id;
+	__u32 flags;
 } __attribute__((packed));
 
 #define MAX_ARGS_SIZE	 80
@@ -137,6 +147,10 @@ struct event_config {
 #define MAX_MATCH_FILE_VALUES 2
 #endif
 
+/* Number of allowed actions for selector.
+ */
+#define MAX_ACTIONS 3
+
 /* Constants bounding printers if these change or buffer size changes then
  * we will need to resize. TBD would be to size these at compile time using
  * buffer size information.
@@ -148,12 +162,15 @@ static inline __attribute__((always_inline)) __u32 get_index(void *ctx)
 {
 	return (__u32)get_attach_cookie(ctx);
 }
-
-#define MAX_ENTRIES_CONFIG 100 /* MaxKprobesMulti in go code */
 #else
-#define get_index(ctx)	   0
-#define MAX_ENTRIES_CONFIG 1
+#define get_index(ctx) 0
 #endif
+
+// Filter tailcalls are {kprobe,tracepoint}/{6,7,8,9,10}
+// We do one tail-call per selector, so we can have up to 5 selectors.
+#define MIN_FILTER_TAILCALL 6
+#define MAX_FILTER_TAILCALL 10
+#define MAX_SELECTORS	    (MAX_FILTER_TAILCALL - MIN_FILTER_TAILCALL + 1)
 
 static inline __attribute__((always_inline)) bool ty_is_nop(int ty)
 {
@@ -478,13 +495,20 @@ copy_capability(char *args, unsigned long arg)
 	return sizeof(struct capability_info_type);
 }
 
-#define ARGM_INDEX_MASK	 ((1 << 4) - 1)
-#define ARGM_RETURN_COPY (1 << 4)
+#define ARGM_INDEX_MASK	 0xf
+#define ARGM_RETURN_COPY BIT(4)
+#define ARGM_MAX_DATA	 BIT(5)
 
 static inline __attribute__((always_inline)) bool
 hasReturnCopy(unsigned long argm)
 {
 	return (argm & ARGM_RETURN_COPY) != 0;
+}
+
+static inline __attribute__((always_inline)) bool
+has_max_data(unsigned long argm)
+{
+	return (argm & ARGM_MAX_DATA) != 0;
 }
 
 static inline __attribute__((always_inline)) unsigned long
@@ -506,12 +530,31 @@ get_arg_meta(int meta, struct msg_generic_kprobe *e)
 }
 
 static inline __attribute__((always_inline)) long
-__copy_char_buf(long off, unsigned long arg, unsigned long bytes,
-		struct msg_generic_kprobe *e)
+__copy_char_buf(void *ctx, long off, unsigned long arg, unsigned long bytes,
+		bool max_data, struct msg_generic_kprobe *e,
+		struct bpf_map_def *data_heap)
 {
 	int *s = (int *)args_off(e, off);
-	size_t rd_bytes;
+	size_t rd_bytes, extra = 8;
 	int err;
+
+#ifdef __LARGE_BPF_PROG
+	if (max_data && data_heap) {
+		/* The max_data flag is enabled, the first int value indicates
+		 * if we use (1) data events or not (0).
+		 */
+		if (bytes >= 0x1000) {
+			s[0] = 1;
+			return data_event_bytes(ctx,
+						(struct data_event_desc *)&s[1],
+						arg, bytes, data_heap) +
+			       4;
+		}
+		s[0] = 0;
+		s = (int *)args_off(e, off + 4);
+		extra += 4;
+	}
+#endif // __LARGE_BPF_PROG
 
 	/* Bound bytes <4095 to ensure bytes does not read past end of buffer */
 	rd_bytes = bytes < 0x1000 ? bytes : 0xfff;
@@ -522,12 +565,13 @@ __copy_char_buf(long off, unsigned long arg, unsigned long bytes,
 		return return_error(s, char_buf_pagefault);
 	s[0] = (int)bytes;
 	s[1] = (int)rd_bytes;
-	return rd_bytes + 8;
+	return rd_bytes + extra;
 }
 
 static inline __attribute__((always_inline)) long
 copy_char_buf(void *ctx, long off, unsigned long arg, int argm,
-	      struct msg_generic_kprobe *e)
+	      struct msg_generic_kprobe *e,
+	      struct bpf_map_def *data_heap)
 {
 	int *s = (int *)args_off(e, off);
 	unsigned long meta;
@@ -540,7 +584,7 @@ copy_char_buf(void *ctx, long off, unsigned long arg, int argm,
 	}
 	meta = get_arg_meta(argm, e);
 	probe_read(&bytes, sizeof(bytes), &meta);
-	return __copy_char_buf(off, arg, bytes, e);
+	return __copy_char_buf(ctx, off, arg, bytes, has_max_data(argm), e, data_heap);
 }
 
 static inline __attribute__((always_inline)) long
@@ -653,18 +697,12 @@ filter_file_buf(struct selector_arg_filter *filter, char *args)
 }
 
 static inline __attribute__((always_inline)) long
-__copy_char_iovec(long off, unsigned long arg, unsigned long meta,
+__copy_char_iovec(long off, unsigned long arg, unsigned long cnt,
 		  unsigned long max, struct msg_generic_kprobe *e)
 {
 	long size, off_orig = off;
-	int err, i = 0, cnt;
+	unsigned long i = 0;
 	int *s;
-
-	err = probe_read(&cnt, sizeof(cnt), &meta);
-	if (err < 0) {
-		char *args = args_off(e, off_orig);
-		return return_stack_error(args, 0, char_buf_pagefault);
-	}
 
 	size = 0;
 	off += 8;
@@ -761,12 +799,24 @@ filter_64ty_selector_val(struct selector_arg_filter *filter, char *args)
 #pragma unroll
 	for (i = 0; i < MAX_MATCH_VALUES; i++) {
 		__u64 w = v[i];
-		bool res = (*(u64 *)args == w);
+		bool res;
 
-		if (filter->op == op_filter_eq && res)
-			return 1;
-		if (filter->op == op_filter_neq && !res)
-			return 1;
+		switch (filter->op) {
+		case op_filter_eq:
+		case op_filter_neq:
+			res = (*(u64 *)args == w);
+
+			if (filter->op == op_filter_eq && res)
+				return 1;
+			if (filter->op == op_filter_neq && !res)
+				return 1;
+			break;
+		case op_filter_mask:
+			if (*(u64 *)args & w)
+				return 1;
+		default:
+			break;
+		}
 		j += 8;
 		if (j + 8 >= filter->vallen)
 			break;
@@ -819,6 +869,7 @@ filter_64ty(struct selector_arg_filter *filter, char *args)
 	switch (filter->op) {
 	case op_filter_eq:
 	case op_filter_neq:
+	case op_filter_mask:
 		return filter_64ty_selector_val(filter, args);
 	case op_filter_inmap:
 	case op_filter_notinmap:
@@ -837,12 +888,24 @@ filter_32ty_selector_val(struct selector_arg_filter *filter, char *args)
 #pragma unroll
 	for (i = 0; i < MAX_MATCH_VALUES; i++) {
 		__u32 w = v[i];
-		bool res = (*(u32 *)args == w);
+		bool res;
 
-		if (filter->op == op_filter_eq && res)
-			return 1;
-		if (filter->op == op_filter_neq && !res)
-			return 1;
+		switch (filter->op) {
+		case op_filter_eq:
+		case op_filter_neq:
+			res = (*(u32 *)args == w);
+
+			if (filter->op == op_filter_eq && res)
+				return 1;
+			if (filter->op == op_filter_neq && !res)
+				return 1;
+			break;
+		case op_filter_mask:
+			if (*(u32 *)args & w)
+				return 1;
+		default:
+			break;
+		}
 		// placed here to allow llvm unroll this loop
 		j += 4;
 		if (j + 8 >= filter->vallen)
@@ -881,6 +944,7 @@ filter_32ty(struct selector_arg_filter *filter, char *args)
 	switch (filter->op) {
 	case op_filter_eq:
 	case op_filter_neq:
+	case op_filter_mask:
 		return filter_32ty_selector_val(filter, args);
 	case op_filter_inmap:
 	case op_filter_notinmap:
@@ -896,6 +960,7 @@ static inline __attribute__((always_inline)) size_t type_to_min_size(int type,
 	switch (type) {
 	case fd_ty:
 	case file_ty:
+	case path_ty:
 	case string_type:
 		return MAX_STRING;
 	case int_type:
@@ -938,7 +1003,10 @@ static inline __attribute__((always_inline)) size_t type_to_min_size(int type,
 /*
  * For matchBinaries we use two maps:
  * 1. names_map: global (for all sensors) keeps a mapping from names -> ids
- * 2. sel_names_map: per-sensor: keeps a mapping from id -> selector val
+ * 2. sel_names_map: per-sensor: keeps a mapping from selector_id -> id -> selector val
+ *
+ * For each selector we have a separate inner map. We choose the appropriate
+ * inner map based on the selector ID.
  *
  * At exec time, we check names_map and set ->binary in execve_map equal to
  * the id stored in names_map. Assuming the binary name exists in the map,
@@ -948,20 +1016,78 @@ static inline __attribute__((always_inline)) size_t type_to_min_size(int type,
  * whether the selector matches or not.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 256);
-	__type(key, __u32);
-	__type(value, __u32);
+	__uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
+	__uint(max_entries, MAX_SELECTORS);
+	__uint(key_size, sizeof(u32)); /* selector id */
+	__array(
+		values, struct {
+			__uint(type, BPF_MAP_TYPE_HASH);
+			__uint(max_entries, 256);
+			__type(key, __u32);
+			__type(value, __u32);
+		});
 } sel_names_map SEC(".maps");
 
-static inline __attribute__((always_inline)) int
-selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
+static inline __attribute__((always_inline)) int match_binaries(void *sel_names, __u32 selidx)
 {
+	void *binaries_map;
+	struct execve_map_value *execve;
+	__u32 *op, max = 0xffffffff; // UINT32_MAX
+	__u32 ppid, bin_key, *bin_val;
+	bool walker = 0;
+
+	// if binaries_map is NULL for the specific selidx, this
+	// means that the specific selector does not contain any
+	// matchBinaries actions. So we just proceed.
+	binaries_map = map_lookup_elem(sel_names, &selidx);
+	if (binaries_map) {
+		op = map_lookup_elem(binaries_map, &max);
+		if (op) {
+			execve = event_find_curr(&ppid, &walker);
+			if (!execve)
+				return 0;
+
+			bin_key = execve->binary;
+			bin_val = map_lookup_elem(binaries_map, &bin_key);
+
+			/*
+			 * The following things may happen:
+			 * binary is not part of names_map, execve_map->binary will be `0` and `bin_val` will always be `0`
+			 * binary is part of `names_map`:
+			 *  if binary is not part of this selector, bin_val will be`0`
+			 *  if binary is part of this selector: `bin_val will be `!0`
+			 */
+			if (*op == op_filter_in) {
+				if (!bin_val)
+					return 0;
+			} else if (*op == op_filter_notin) {
+				if (bin_val)
+					return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
+static inline __attribute__((always_inline)) int
+generic_process_filter_binary(struct event_config *config)
+{
+	/* single flag bit at the moment (FLAGS_EARLY_FILTER) */
+	if (config->flags & FLAGS_EARLY_FILTER)
+		return match_binaries(&sel_names_map, 0);
+	return 1;
+}
+
+static inline __attribute__((always_inline)) int
+selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx,
+		    bool early_binary_filter)
+{
+	struct selector_arg_filters *filters;
 	struct selector_arg_filter *filter;
-	long seloff, argoff, pass;
-	__u32 index, *op;
+	long seloff, argoff, argsoff, pass = 1, margsoff;
+	__u32 i = 0, index;
 	char *args;
-	__u32 max = 0xffffffff; // UINT32_MAX
 
 	seloff = 4; /* start of the relative offsets */
 	seloff += (selidx * 4); /* relative offset for this selector */
@@ -982,85 +1108,74 @@ selector_arg_offset(__u8 *f, struct msg_generic_kprobe *e, __u32 selidx)
 	/* skip the matchCapabilityChanges by reading its length */
 	seloff += *(__u32 *)((__u64)f + (seloff & INDEX_MASK));
 
-	op = map_lookup_elem(&sel_names_map, &max);
-	if (op) {
-		struct execve_map_value *execve;
-		bool walker = 0;
-		__u32 ppid, bin_key, *bin_val;
-
-		execve = event_find_curr(&ppid, &walker);
-		if (!execve)
-			return 0;
-
-		bin_key = execve->binary;
-		bin_val = map_lookup_elem(&sel_names_map, &bin_key);
-
-		/*
-		 * The following things may happen:
-		 * binary is not part of names_map, execve_map->binary will be `0` and `bin_val` will always be `0`
-		 * binary is part of `names_map`:
-		 *  if binary is not part of this selector, bin_val will be`0`
-		 *  if binary is part of this selector: `bin_val will be `!0`
-		 */
-		if (*op == op_filter_in) {
-			if (!bin_val)
-				return 0;
-		} else if (*op == op_filter_notin) {
-			if (bin_val)
-				return 0;
-		}
-	}
+	// check for match binary actions
+	if (!early_binary_filter && !match_binaries(&sel_names_map, selidx))
+		return 0;
 
 	/* Making binary selectors fixes size helps on some kernels */
 	seloff &= INDEX_MASK;
-	filter = (struct selector_arg_filter *)&f[seloff];
+	filters = (struct selector_arg_filters *)&f[seloff];
 
-	if (filter->arglen <= 4) // no filters
+	if (filters->arglen <= sizeof(struct selector_arg_filters)) // no filters
 		return seloff;
 
-	index = filter->index;
-	if (index > 5)
-		return 0;
+#ifdef __LARGE_BPF_PROG
+	for (i = 0; i < 5; i++)
+#endif
+	{
+		argsoff = filters->argoff[i];
+		asm volatile("%[argsoff] &= 0x3ff;\n" ::[argsoff] "+r"(argsoff)
+			     :);
 
-	asm volatile("%[index] &= 0x7;\n" ::[index] "+r"(index)
-		     :);
-	argoff = e->argsoff[index];
-	asm volatile("%[argoff] &= 0x7ff;\n" ::[argoff] "+r"(argoff)
-		     :);
-	args = &e->args[argoff];
+		if (argsoff <= 0)
+			return pass ? seloff : 0;
 
-	switch (filter->type) {
-	case fd_ty:
-		/* Advance args past fd */
-		args += 4;
-	case file_ty:
-		pass = filter_file_buf(filter, args);
-		break;
-	case string_type:
-		/* for strings, we just encode the length */
-		pass = filter_char_buf(filter, args, 4);
-		break;
-	case char_buf:
-		/* for buffers, we just encode the expected length and the
-		 * length that was actually read (see: __copy_char_buf)
-		 */
-		pass = filter_char_buf(filter, args, 8);
-		break;
-	case s64_ty:
-	case u64_ty:
-		pass = filter_64ty(filter, args);
-		break;
-	case size_type:
-	case int_type:
-	case s32_ty:
-	case u32_ty:
-		pass = filter_32ty(filter, args);
-		break;
-	default:
-		pass = 1; // no policy in place
-		break;
+		margsoff = (seloff + argsoff) & INDEX_MASK;
+		filter = (struct selector_arg_filter *)&f[margsoff];
+
+		index = filter->index;
+		if (index > 5)
+			return 0;
+
+		asm volatile("%[index] &= 0x7;\n" ::[index] "+r"(index)
+			     :);
+		argoff = e->argsoff[index];
+		asm volatile("%[argoff] &= 0x7ff;\n" ::[argoff] "+r"(argoff)
+			     :);
+		args = &e->args[argoff];
+
+		switch (filter->type) {
+		case fd_ty:
+			/* Advance args past fd */
+			args += 4;
+		case file_ty:
+		case path_ty:
+			pass &= filter_file_buf(filter, args);
+			break;
+		case string_type:
+			/* for strings, we just encode the length */
+			pass &= filter_char_buf(filter, args, 4);
+			break;
+		case char_buf:
+			/* for buffers, we just encode the expected length and the
+			 * length that was actually read (see: __copy_char_buf)
+			 */
+			pass &= filter_char_buf(filter, args, 8);
+			break;
+		case s64_ty:
+		case u64_ty:
+			pass &= filter_64ty(filter, args);
+			break;
+		case size_type:
+		case int_type:
+		case s32_ty:
+		case u32_ty:
+			pass &= filter_32ty(filter, args);
+			break;
+		default:
+			break;
+		}
 	}
-
 	return pass ? seloff : 0;
 }
 
@@ -1072,7 +1187,8 @@ static inline __attribute__((always_inline)) int filter_args_reject(u64 id)
 }
 
 static inline __attribute__((always_inline)) int
-filter_args(struct msg_generic_kprobe *e, int index, void *filter_map)
+filter_args(struct msg_generic_kprobe *e, int index, void *filter_map,
+	    bool early_binary_filter)
 {
 	__u8 *f;
 
@@ -1094,7 +1210,7 @@ filter_args(struct msg_generic_kprobe *e, int index, void *filter_map)
 		return filter_args_reject(e->id);
 
 	if (e->sel.active[index]) {
-		int pass = selector_arg_offset(f, e, index);
+		int pass = selector_arg_offset(f, e, index, early_binary_filter);
 		if (pass)
 			return pass;
 	}
@@ -1214,26 +1330,19 @@ copyfd(struct msg_generic_kprobe *e, int oldfd, int newfd)
 
 #ifdef __LARGE_BPF_PROG
 static inline __attribute__((always_inline)) void
-__do_action_sigkill(struct bpf_map_def *config_map, int idx)
+do_action_signal(int signal)
 {
-	struct event_config *config;
-
-	config = map_lookup_elem(config_map, &idx);
-	if (config && config->sigkill)
-		send_signal(FGS_SIGKILL);
+	send_signal(signal);
 }
 #else
-static inline __attribute__((always_inline)) void
-__do_action_sigkill(struct bpf_map_def *config_map, int idx)
-{
-}
+#define do_action_signal(signal)
 #endif /* __LARGE_BPF_PROG */
 
-static inline __attribute__((always_inline)) long
-__do_action(long i, struct msg_generic_kprobe *e,
-	    struct selector_action *actions, struct bpf_map_def *override_tasks,
-	    struct bpf_map_def *config_map)
+static inline __attribute__((always_inline)) __u32
+do_action(__u32 i, struct msg_generic_kprobe *e,
+	  struct selector_action *actions, struct bpf_map_def *override_tasks)
 {
+	int signal __maybe_unused = FGS_SIGKILL;
 	int action = actions->act[i];
 	__s32 error, *error_p;
 	int fdi, namei;
@@ -1253,8 +1362,10 @@ __do_action(long i, struct msg_generic_kprobe *e,
 		newfdi = actions->act[++i];
 		err = copyfd(e, oldfdi, newfdi);
 		break;
+	case ACTION_SIGNAL:
+		signal = actions->act[++i];
 	case ACTION_SIGKILL:
-		__do_action_sigkill(config_map, e->idx);
+		do_action_signal(signal);
 		break;
 	case ACTION_OVERRIDE:
 		error = actions->act[++i];
@@ -1285,43 +1396,58 @@ __do_action(long i, struct msg_generic_kprobe *e,
 		e->action = action;
 		return ++i;
 	}
-	return -1;
+	return 0;
 }
 
-static inline __attribute__((always_inline)) long
-do_actions(struct msg_generic_kprobe *e, struct selector_action *actions,
-	   struct bpf_map_def *override_tasks, struct bpf_map_def *config_map)
+static inline __attribute__((always_inline)) bool
+has_action(struct selector_action *actions, __u32 idx)
 {
-	/* Clang really doesn't want to unwind a loop here. */
-	long i = 0;
-	i = __do_action(i, e, actions, override_tasks, config_map);
-	if (i)
-		goto out;
-	i = __do_action(i, e, actions, override_tasks, config_map);
-out:
-	return i > 0 ? true : 0;
+	__u32 offset = idx * sizeof(__u32) + sizeof(*actions);
+
+	return offset < actions->actionlen;
 }
 
-// Filter tailcalls are {kprobe,tracepoint}/{6,7,8,9,10}
-// We do one tail-call per selector, so we can have up to 5 selectors.
-#define MIN_FILTER_TAILCALL 6
-#define MAX_FILTER_TAILCALL 10
-#define MAX_SELECTORS	    (MAX_FILTER_TAILCALL - MIN_FILTER_TAILCALL + 1)
+/* Currently supporting 2 actions for selector. */
+static inline __attribute__((always_inline)) bool
+do_actions(struct msg_generic_kprobe *e, struct selector_action *actions,
+	   struct bpf_map_def *override_tasks)
+{
+	bool nopost = false;
+	__u32 l, i = 0;
+
+#ifndef __LARGE_BPF_PROG
+#pragma unroll
+#endif
+	for (l = 0; l < MAX_ACTIONS; l++) {
+		if (!has_action(actions, i))
+			return !nopost;
+
+		i = do_action(i, e, actions, override_tasks);
+		if (!i)
+			return false;
+
+		nopost |= actions->act[0] == ACTION_NOPOST;
+	}
+
+	return !nopost;
+}
 
 static inline __attribute__((always_inline)) long
 filter_read_arg(void *ctx, int index, struct bpf_map_def *heap,
 		struct bpf_map_def *filter, struct bpf_map_def *tailcalls,
-		struct bpf_map_def *override_tasks,
 		struct bpf_map_def *config_map)
 {
 	struct msg_generic_kprobe *e;
+	struct event_config *config;
 	int pass, zero = 0;
-	size_t total;
 
 	e = map_lookup_elem(heap, &zero);
 	if (!e)
 		return 0;
-	pass = filter_args(e, index, filter);
+	config = map_lookup_elem(config_map, &e->idx);
+	if (!config)
+		return 0;
+	pass = filter_args(e, index, filter, config->flags & FLAGS_EARLY_FILTER);
 	if (!pass) {
 		index++;
 		if (index <= MAX_SELECTORS && e->sel.active[index])
@@ -1333,32 +1459,66 @@ filter_read_arg(void *ctx, int index, struct bpf_map_def *heap,
 	// If pass >1 then we need to consult the selector actions
 	// otherwise pass==1 indicates using default action.
 	if (pass > 1) {
-		struct selector_arg_filter *arg;
-		struct selector_action *actions;
-		int actoff;
-		__u8 *f;
-
-		f = map_lookup_elem(filter, &e->idx);
-		if (f) {
-			bool postit;
-
-			asm volatile("%[pass] &= 0x7ff;\n"
-				     : [pass] "+r"(pass)
-				     :);
-			arg = (struct selector_arg_filter *)&f[pass];
-
-			actoff = pass + arg->arglen;
-			asm volatile("%[actoff] &= 0x7ff;\n"
-				     : [actoff] "+r"(actoff)
-				     :);
-			actions = (struct selector_action *)&f[actoff];
-
-			postit = do_actions(e, actions, override_tasks,
-					    config_map);
-			if (!postit)
-				return 1;
-		}
+		e->pass = pass;
+		tail_call(ctx, tailcalls, 11);
 	}
+
+	tail_call(ctx, tailcalls, 12);
+	return 1;
+}
+
+static inline __attribute__((always_inline)) long
+generic_actions(void *ctx, struct bpf_map_def *heap,
+		struct bpf_map_def *filter,
+		struct bpf_map_def *tailcalls,
+		struct bpf_map_def *override_tasks)
+{
+	struct selector_arg_filters *arg;
+	struct selector_action *actions;
+	struct msg_generic_kprobe *e;
+	int actoff, pass, zero = 0;
+	bool postit;
+	__u8 *f;
+
+	e = map_lookup_elem(heap, &zero);
+	if (!e)
+		return 0;
+
+	pass = e->pass;
+	if (pass <= 1)
+		return 0;
+
+	f = map_lookup_elem(filter, &e->idx);
+	if (!f)
+		return 0;
+
+	asm volatile("%[pass] &= 0x7ff;\n"
+		     : [pass] "+r"(pass)
+		     :);
+	arg = (struct selector_arg_filters *)&f[pass];
+
+	actoff = pass + arg->arglen;
+	asm volatile("%[actoff] &= 0x7ff;\n"
+		     : [actoff] "+r"(actoff)
+		     :);
+	actions = (struct selector_action *)&f[actoff];
+
+	postit = do_actions(e, actions, override_tasks);
+	if (postit)
+		tail_call(ctx, tailcalls, 12);
+	return 1;
+}
+
+static inline __attribute__((always_inline)) long
+generic_output(void *ctx, struct bpf_map_def *heap)
+{
+	struct msg_generic_kprobe *e;
+	int zero = 0;
+	size_t total;
+
+	e = map_lookup_elem(heap, &zero);
+	if (!e)
+		return 0;
 
 #ifdef __NS_CHANGES_FILTER
 	/* update the namespaces if we matched a change on that */
@@ -1412,7 +1572,8 @@ filter_read_arg(void *ctx, int index, struct bpf_map_def *heap,
  */
 static inline __attribute__((always_inline)) long
 read_call_arg(void *ctx, struct msg_generic_kprobe *e, int index, int type,
-	      long orig_off, unsigned long arg, int argm)
+	      long orig_off, unsigned long arg, int argm,
+	      struct bpf_map_def *data_heap)
 {
 	size_t min_size = type_to_min_size(type, argm);
 	char *args = e->args;
@@ -1434,9 +1595,12 @@ read_call_arg(void *ctx, struct msg_generic_kprobe *e, int index, int type,
 		path_arg = _(&file->f_path);
 	}
 		// fallthrough to copy_path
-	case path_ty:
+	case path_ty: {
+		if (!path_arg)
+			probe_read(&path_arg, sizeof(path_arg), &arg);
 		size = copy_path(args, path_arg);
 		break;
+	}
 	case fd_ty: {
 		struct fdinstall_key key = { 0 };
 		struct fdinstall_value *val;
@@ -1501,7 +1665,7 @@ read_call_arg(void *ctx, struct msg_generic_kprobe *e, int index, int type,
 		size = copy_cred(args, arg);
 		break;
 	case char_buf:
-		size = copy_char_buf(ctx, orig_off, arg, argm, e);
+		size = copy_char_buf(ctx, orig_off, arg, argm, e, data_heap);
 		break;
 	case char_iovec:
 		size = copy_char_iovec(ctx, orig_off, arg, argm, e);

@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"strings"
 
+	pb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
-	pb "github.com/cilium/tetragon/pkg/oldhubbleapi/v1/flow"
 )
 
 func filterByProtocol(protocols []string) (FilterFunc, error) {
@@ -90,7 +90,7 @@ func filterByProtocol(protocols []string) (FilterFunc, error) {
 type ProtocolFilter struct{}
 
 // OnBuildFilter builds a L4 protocol filter
-func (p *ProtocolFilter) OnBuildFilter(ctx context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
+func (p *ProtocolFilter) OnBuildFilter(_ context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
 	var fs []FilterFunc
 
 	if ff.GetProtocol() != nil {

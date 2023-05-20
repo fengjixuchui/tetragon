@@ -17,10 +17,21 @@ struct {
 	__type(value, struct msg_exit);
 } exit_heap_map SEC(".maps");
 
-static inline __attribute__((always_inline)) void event_exit_send(void *ctx,
-								  __u32 tgid, struct task_struct *task)
+static inline __attribute__((always_inline)) void event_exit_send(struct sched_execve_args *ctx, __u64 current)
 {
 	struct execve_map_value *enter;
+	__u32 pid, tgid;
+
+	pid = current & 0xFFFFffff;
+	tgid = current >> 32;
+
+	/* We are only tracking group leaders so if tgid is not
+	 * the same as the pid then this is an untracked child
+	 * and we can skip the lookup/insert/delete cycle that
+	 * would otherwise occur.
+	 */
+	if (pid != tgid)
+		return;
 
 	/* It is safe to do a map_lookup_event() here because
 	 * we must have captured the execve case in order for an
@@ -34,6 +45,7 @@ static inline __attribute__((always_inline)) void event_exit_send(void *ctx,
 	if (!enter)
 		return;
 	if (enter->key.ktime) {
+		struct task_struct *task = (struct task_struct *)get_current_task();
 		size_t size = sizeof(struct msg_exit);
 		struct msg_exit *exit;
 		int zero = 0;
@@ -56,6 +68,8 @@ static inline __attribute__((always_inline)) void event_exit_send(void *ctx,
 		exit->current.pad[3] = 0;
 		exit->current.ktime = enter->key.ktime;
 
+		/* We track and report only thread leader so here tgid == tid */
+		exit->info.tid = tgid;
 		probe_read(&exit->info.code, sizeof(exit->info.code),
 			   _(&task->exit_code));
 

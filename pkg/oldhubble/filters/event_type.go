@@ -17,8 +17,8 @@ package filters
 import (
 	"context"
 
+	pb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
-	pb "github.com/cilium/tetragon/pkg/oldhubbleapi/v1/flow"
 )
 
 func filterByEventType(types []*pb.EventTypeFilter) FilterFunc {
@@ -48,7 +48,7 @@ func filterByEventType(types []*pb.EventTypeFilter) FilterFunc {
 type EventTypeFilter struct{}
 
 // OnBuildFilter builds an event type filter
-func (e *EventTypeFilter) OnBuildFilter(ctx context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
+func (e *EventTypeFilter) OnBuildFilter(_ context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
 	var fs []FilterFunc
 
 	types := ff.GetEventType()

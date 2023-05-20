@@ -4,7 +4,6 @@
 package btf
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path"
@@ -17,7 +16,6 @@ import (
 )
 
 var (
-	btfObj  *btf.Spec
 	btfFile string
 )
 
@@ -26,7 +24,7 @@ func btfFileExists(file string) error {
 	return err
 }
 
-func observerFindBTF(ctx context.Context, lib, btf string) (string, error) {
+func observerFindBTF(lib, btf string) (string, error) {
 	if btf == "" {
 		// Alternative to auto-discovery and/or command line argument we
 		// can also set via environment variable.
@@ -81,22 +79,17 @@ func NewBTF() (*btf.Spec, error) {
 	return btf.LoadSpec(btfFile)
 }
 
-func InitCachedBTF(ctx context.Context, lib, btf string) error {
+func InitCachedBTF(lib, btf string) error {
 	var err error
 
 	// Find BTF metdaata and populate btf opaqu object
-	btfFile, err = observerFindBTF(ctx, lib, btf)
+	btfFile, err = observerFindBTF(lib, btf)
 	if err != nil {
 		return fmt.Errorf("tetragon, aborting kernel autodiscovery failed: %w", err)
 	}
-	btfObj, err = NewBTF()
 	return err
 }
 
 func GetCachedBTFFile() string {
 	return btfFile
-}
-
-func GetCachedBTF() *btf.Spec {
-	return btfObj
 }

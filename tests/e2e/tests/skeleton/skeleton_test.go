@@ -84,6 +84,9 @@ func TestMain(m *testing.M) {
 }
 
 func TestSkeletonBasic(t *testing.T) {
+	// Must be called at the beginning of every test
+	runner.SetupExport(t)
+
 	// Grab the minimum kernel version in all cluster nodes and define an RPC checker with it
 	kversion := helpers.GetMinKernelVersion(t, runner.Environment)
 	// Create an curl event checker with a limit or 10 events or 30 seconds, whichever comes first
@@ -124,6 +127,7 @@ func TestSkeletonBasic(t *testing.T) {
 	runner.TestInParallel(t, runEventChecker, runWorkload)
 }
 
+// nolint:revive // ignore unused parameter because of comments
 func curlEventChecker(kernelVersion string) *checker.RPCChecker {
 	curlEventChecker := ec.NewUnorderedEventChecker(
 		// Checkers should be given a unique name. This shows up in the logs and can be

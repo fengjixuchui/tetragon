@@ -101,7 +101,7 @@ func (src traceBenchRw) benchRwWorker(ctx context.Context) {
 	}
 }
 
-func (src traceBenchRw) Run(ctx context.Context, args *Arguments, summary *Summary) error {
+func (src traceBenchRw) Run(ctx context.Context, _ *Arguments, _ *Summary) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -118,7 +118,7 @@ func (src traceBenchRw) Run(ctx context.Context, args *Arguments, summary *Summa
 	return nil
 }
 
-func (src traceBenchRw) ConfigFilename(ctx context.Context, args *Arguments) string {
+func (src traceBenchRw) ConfigFilename(_ *Arguments) string {
 	matchPid := strconv.Itoa(int(observer.GetMyPid()))
 
 	tmpl := `

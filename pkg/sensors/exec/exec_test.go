@@ -424,13 +424,13 @@ func TestLoadInitialSensor(t *testing.T) {
 	option.Config.HubbleLib = tus.Conf().TetragonLib
 
 	t.Logf("Loading sensor %v\n", sensor.Name)
-	if err := sensor.Load(context.TODO(), bpf.MapPrefixPath(), bpf.MapPrefixPath(), ""); err != nil {
+	if err := sensor.Load(bpf.MapPrefixPath(), bpf.MapPrefixPath(), ""); err != nil {
 		t.Fatalf("sensor.Load failed: %v\n", err)
 	}
 
 	tus.CheckSensorLoad([]*sensors.Sensor{sensor}, sensorMaps, sensorProgs, t)
 
-	sensors.UnloadAll(tus.Conf().TetragonLib)
+	sensors.UnloadAll()
 }
 
 func TestDocker(t *testing.T) {
@@ -534,8 +534,8 @@ func TestExecPerfring(t *testing.T) {
 	}
 
 	option.Config.HubbleLib = tus.Conf().TetragonLib
-	tus.LoadSensor(ctx, t, base.GetInitialSensor())
-	tus.LoadSensor(ctx, t, testsensor.GetTestSensor())
+	tus.LoadSensor(t, base.GetInitialSensor())
+	tus.LoadSensor(t, testsensor.GetTestSensor())
 
 	ops := func() {
 		if err := exec.Command("/bin/true").Run(); err != nil {

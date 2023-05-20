@@ -355,7 +355,7 @@ func (checker *ProcessExecChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessExec); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessExec event", event)
+	return fmt.Errorf("%s: %T is not a ProcessExec event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -572,7 +572,7 @@ func (checker *ProcessExitChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessExit); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessExit event", event)
+	return fmt.Errorf("%s: %T is not a ProcessExit event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -706,7 +706,7 @@ func (checker *ProcessKprobeChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessKprobe); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessKprobe event", event)
+	return fmt.Errorf("%s: %T is not a ProcessKprobe event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -962,7 +962,7 @@ func (checker *ProcessTracepointChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessTracepoint); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessTracepoint event", event)
+	return fmt.Errorf("%s: %T is not a ProcessTracepoint event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -1102,7 +1102,7 @@ func (checker *ProcessUprobeChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessUprobe); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessUprobe event", event)
+	return fmt.Errorf("%s: %T is not a ProcessUprobe event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -1218,7 +1218,7 @@ func (checker *TestChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.Test); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a Test event", event)
+	return fmt.Errorf("%s: %T is not a Test event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -1341,7 +1341,7 @@ func (checker *ProcessLoaderChecker) CheckEvent(event Event) error {
 	if ev, ok := event.(*tetragon.ProcessLoader); ok {
 		return checker.Check(ev)
 	}
-	return fmt.Errorf("%T is not a ProcessLoader event", event)
+	return fmt.Errorf("%s: %T is not a ProcessLoader event", CheckerLogPrefix(checker), event)
 }
 
 // CheckResponse checks a single gRPC response and implements the EventChecker interface
@@ -2255,6 +2255,7 @@ type ProcessChecker struct {
 	Refcnt       *uint32                            `json:"refcnt,omitempty"`
 	Cap          *CapabilitiesChecker               `json:"cap,omitempty"`
 	Ns           *NamespacesChecker                 `json:"ns,omitempty"`
+	Tid          *uint32                            `json:"tid,omitempty"`
 }
 
 // NewProcessChecker creates a new ProcessChecker
@@ -2358,6 +2359,14 @@ func (checker *ProcessChecker) Check(event *tetragon.Process) error {
 				return fmt.Errorf("Ns check failed: %w", err)
 			}
 		}
+		if checker.Tid != nil {
+			if event.Tid == nil {
+				return fmt.Errorf("Tid is nil and does not match expected value %v", *checker.Tid)
+			}
+			if *checker.Tid != event.Tid.Value {
+				return fmt.Errorf("Tid has value %v which does not match expected value %v", event.Tid.Value, *checker.Tid)
+			}
+		}
 		return nil
 	}
 	if err := fieldChecks(); err != nil {
@@ -2456,6 +2465,12 @@ func (checker *ProcessChecker) WithNs(check *NamespacesChecker) *ProcessChecker 
 	return checker
 }
 
+// WithTid adds a Tid check to the ProcessChecker
+func (checker *ProcessChecker) WithTid(check uint32) *ProcessChecker {
+	checker.Tid = &check
+	return checker
+}
+
 //FromProcess populates the ProcessChecker using data from a Process field
 func (checker *ProcessChecker) FromProcess(event *tetragon.Process) *ProcessChecker {
 	if event == nil {
@@ -2494,6 +2509,10 @@ func (checker *ProcessChecker) FromProcess(event *tetragon.Process) *ProcessChec
 	}
 	if event.Ns != nil {
 		checker.Ns = NewNamespacesChecker().FromNamespaces(event.Ns)
+	}
+	if event.Tid != nil {
+		val := event.Tid.Value
+		checker.Tid = &val
 	}
 	return checker
 }

@@ -22,7 +22,7 @@ type SensorMap struct {
 	Progs []uint
 }
 
-func findMapForProg(coll *program.LoadedCollection, nam string, p *program.LoadedProgram, t *testing.T) *program.LoadedMap {
+func findMapForProg(coll *program.LoadedCollection, nam string, p *program.LoadedProgram) *program.LoadedMap {
 	for name, m := range coll.Maps {
 		if nam != name {
 			continue
@@ -43,7 +43,7 @@ type prog struct {
 	mark bool
 }
 
-func findProgram(cache []*prog, name string, typ ebpf.ProgramType, t *testing.T) *prog {
+func findProgram(cache []*prog, name string, typ ebpf.ProgramType) *prog {
 	for _, c := range cache {
 		if c.prog.Type != typ {
 			continue
@@ -115,7 +115,7 @@ func mergeSensorMaps(t *testing.T, maps1, maps2 []SensorMap, progs1, progs2 []Se
 func mergeInBaseSensorMaps(t *testing.T, sensorMaps []SensorMap, sensorProgs []SensorProg) ([]SensorMap, []SensorProg) {
 	var baseProgs = []SensorProg{
 		0: SensorProg{Name: "event_execve", Type: ebpf.TracePoint},
-		1: SensorProg{Name: "event_exit", Type: ebpf.Kprobe},
+		1: SensorProg{Name: "event_exit", Type: ebpf.TracePoint},
 		2: SensorProg{Name: "event_wake_up_new_task", Type: ebpf.Kprobe},
 		3: SensorProg{Name: "execve_send", Type: ebpf.TracePoint},
 	}
@@ -126,7 +126,7 @@ func mergeInBaseSensorMaps(t *testing.T, sensorMaps []SensorMap, sensorProgs []S
 		SensorMap{Name: "tcpmon_map", Progs: []uint{0, 1, 2, 3}},
 
 		// all but event_execve
-		SensorMap{Name: "execve_map_stats", Progs: []uint{0, 1, 2, 3}},
+		SensorMap{Name: "execve_map_stats", Progs: []uint{1, 2}},
 
 		// event_execve
 		SensorMap{Name: "names_map", Progs: []uint{0}},
@@ -158,7 +158,7 @@ func CheckSensorLoad(sensors []*sensors.Sensor, sensorMaps []SensorMap, sensorPr
 
 	// check that we loaded expected programs
 	for _, tp := range sensorProgs {
-		c := findProgram(cache, tp.Name, tp.Type, t)
+		c := findProgram(cache, tp.Name, tp.Type)
 		if c == nil {
 			t.Fatalf("could not find program %v in sensor", tp.Name)
 		}
@@ -194,12 +194,12 @@ func CheckSensorLoad(sensors []*sensors.Sensor, sensorMaps []SensorMap, sensorPr
 		for _, idx := range tm.Progs {
 			tp := sensorProgs[idx]
 
-			c := findProgram(cache, tp.Name, tp.Type, t)
+			c := findProgram(cache, tp.Name, tp.Type)
 			if c == nil {
 				t.Fatalf("could not find program %v in sensor\n", tp.Name)
 			}
 
-			m := findMapForProg(c.coll, tm.Name, c.prog, t)
+			m := findMapForProg(c.coll, tm.Name, c.prog)
 			if m == nil {
 				t.Fatalf("could not find map %v in program %v\n", tm.Name, tp.Name)
 			}
@@ -222,13 +222,13 @@ func CheckSensorLoad(sensors []*sensors.Sensor, sensorMaps []SensorMap, sensorPr
 				continue
 			}
 
-			m := findMapForProg(c.coll, tm.Name, c.prog, t)
+			m := findMapForProg(c.coll, tm.Name, c.prog)
 			if m == nil {
 				continue
 			}
 
 			if m.ID == sharedId {
-				t.Fatalf("Map %s[%d] is shared also with program %s", tm.Name, m.ID, c.name)
+				t.Fatalf("Error: Map %s[%d] is shared also with program %s", tm.Name, m.ID, c.name)
 			}
 		}
 	}

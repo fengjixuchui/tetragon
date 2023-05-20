@@ -50,6 +50,7 @@ type Arguments struct {
 	PrintEvents bool
 	JSONEncode  bool
 	Baseline    bool
+	RBSize      int
 }
 
 func (args *Arguments) String() string {
@@ -82,15 +83,21 @@ func runTetragon(ctx context.Context, configFile string, args *Arguments, summar
 		}
 	}
 
+	option.Config.RBSize = args.RBSize
+
 	option.Config.BpfDir = bpf.MapPrefixPath()
 	option.Config.MapDir = bpf.MapPrefixPath()
 	obs := observer.NewObserver(configFile)
 
-	if err := obs.InitSensorManager(); err != nil {
+	if err := obs.InitSensorManager(nil); err != nil {
 		logger.GetLogger().Fatalf("InitSensorManager failed: %v", err)
 	}
 
-	if err := btf.InitCachedBTF(ctx, option.Config.HubbleLib, ""); err != nil {
+	if err := btf.InitCachedBTF(option.Config.HubbleLib, ""); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := observer.InitDataCache(1024); err != nil {
 		log.Fatal(err)
 	}
 
@@ -119,11 +126,11 @@ func runTetragon(ctx context.Context, configFile string, args *Arguments, summar
 
 	baseSensors := base.GetInitialSensor()
 
-	if err := baseSensors.Load(ctx, option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir); err != nil {
+	if err := baseSensors.Load(option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir); err != nil {
 		log.Fatalf("Load base error: %s\n", err)
 	}
 
-	if err := benchSensors.Load(ctx, option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir); err != nil {
+	if err := benchSensors.Load(option.Config.BpfDir, option.Config.MapDir, option.Config.CiliumDir); err != nil {
 		log.Fatalf("Load sensors error: %s\n", err)
 	}
 
@@ -208,7 +215,7 @@ func startBenchmarkExporter(ctx context.Context, obs *observer.Observer, summary
 	}
 
 	watcher := watcher.NewFakeK8sWatcher(nil)
-	if err := process.InitCache(ctx, watcher, enableCiliumAPI, processCacheSize); err != nil {
+	if err := process.InitCache(watcher, processCacheSize); err != nil {
 		return err
 	}
 

@@ -17,8 +17,8 @@ package filters
 import (
 	"context"
 
+	pb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
-	pb "github.com/cilium/tetragon/pkg/oldhubbleapi/v1/flow"
 )
 
 func filterByVerdicts(vs []pb.Verdict) FilterFunc {
@@ -41,7 +41,7 @@ func filterByVerdicts(vs []pb.Verdict) FilterFunc {
 type VerdictFilter struct{}
 
 // OnBuildFilter builds a forwarding verdict filter
-func (v *VerdictFilter) OnBuildFilter(ctx context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
+func (v *VerdictFilter) OnBuildFilter(_ context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
 	var fs []FilterFunc
 
 	if ff.GetVerdict() != nil {

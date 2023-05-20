@@ -90,7 +90,7 @@ archived_version = false
 # The version number for the version of the docs represented in this doc set.
 # Used in the "version-banner" partial to display a version number for the 
 # current doc set.
-version = "v0.8.3"
+version = "v0.9.0"
 
 # A link to latest version of the docs. Used in the "version-banner" partial to
 # point people to the main doc site.
@@ -224,6 +224,18 @@ enable = false
 #   url = "https://example.org/mail"
 #   icon = "fa fa-envelope"
 #   desc = "Discuss development issues around the project"
+
+# Modify default caches to cacheDir all the time instead of resources because
+# of permissions issues in default local resources directory. See following:
+# - https://gohugo.io/getting-started/configuration/#configure-file-caches
+# - https://github.com/kubernetes/website/pull/24475/files#diff-28043ff911f28a5cb5742f7638363546311225a63eabc365af5356c70d4deb77
+[caches]
+  [caches.assets]
+    dir = ":cacheDir/_gen"
+    maxAge = -1
+  [caches.images]
+    dir = ":cacheDir/_images"
+    maxAge = -1
 
 # hugo module configuration
 

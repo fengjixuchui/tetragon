@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"sync"
 
-	pb "github.com/cilium/tetragon/pkg/oldhubbleapi/v1/flow"
+	pb "github.com/cilium/cilium/api/v1/flow"
 
 	"github.com/cilium/cilium/api/v1/models"
 )
@@ -91,7 +91,7 @@ func (svcc *ServiceCache) InitializeFrom(entries []*models.Service) error {
 
 // Upsert updates or inserts a cache entry and returns true if the update was
 // performed.
-func (svcc *ServiceCache) Upsert(id int64, name, typ, ns string, frontendIP net.IP, frontendPort uint16) bool {
+func (svcc *ServiceCache) Upsert(id int64, name, ns string, frontendIP net.IP, frontendPort uint16) bool {
 	svcc.mu.Lock()
 	defer svcc.mu.Unlock()
 

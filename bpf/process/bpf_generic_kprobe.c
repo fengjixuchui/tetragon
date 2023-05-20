@@ -26,7 +26,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-	__uint(max_entries, 11);
+	__uint(max_entries, 13);
 	__uint(key_size, sizeof(__u32));
 	__uint(value_size, sizeof(__u32));
 } kprobe_calls SEC(".maps");
@@ -38,6 +38,18 @@ struct {
 	__type(value, __s32);
 } override_tasks SEC(".maps");
 
+#ifdef __LARGE_BPF_PROG
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct msg_data);
+} data_heap SEC(".maps");
+#define data_heap_ptr &data_heap
+#else
+#define data_heap_ptr 0
+#endif
+
 struct filter_map_value {
 	unsigned char buf[FILTER_SIZE];
 };
@@ -45,14 +57,14 @@ struct filter_map_value {
 /* Arrays of size 1 will be rewritten to direct loads in verifier */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, MAX_ENTRIES_CONFIG);
+	__uint(max_entries, 1);
 	__type(key, int);
 	__type(value, struct filter_map_value);
 } filter_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, MAX_ENTRIES_CONFIG);
+	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, struct event_config);
 } config_map SEC(".maps");
@@ -73,6 +85,8 @@ generic_kprobe_start_process_filter(void *ctx)
 	msg->idx = get_index(ctx);
 	config = map_lookup_elem(&config_map, &msg->idx);
 	if (!config)
+		return 0;
+	if (!generic_process_filter_binary(config))
 		return 0;
 	if (!policy_filter_check(config->policy_id))
 		return 0;
@@ -143,7 +157,8 @@ generic_kprobe_process_event0(void *ctx)
 	return generic_process_event_and_setup(
 		ctx, (struct bpf_map_def *)&process_call_heap,
 		(struct bpf_map_def *)&kprobe_calls,
-		(struct bpf_map_def *)&config_map);
+		(struct bpf_map_def *)&config_map,
+		(struct bpf_map_def *)data_heap_ptr);
 }
 
 __attribute__((section("kprobe/1"), used)) int
@@ -152,7 +167,8 @@ generic_kprobe_process_event1(void *ctx)
 	return generic_process_event(ctx, 1,
 				     (struct bpf_map_def *)&process_call_heap,
 				     (struct bpf_map_def *)&kprobe_calls,
-				     (struct bpf_map_def *)&config_map);
+				     (struct bpf_map_def *)&config_map,
+				     (struct bpf_map_def *)data_heap_ptr);
 }
 
 __attribute__((section("kprobe/2"), used)) int
@@ -161,7 +177,8 @@ generic_kprobe_process_event2(void *ctx)
 	return generic_process_event(ctx, 2,
 				     (struct bpf_map_def *)&process_call_heap,
 				     (struct bpf_map_def *)&kprobe_calls,
-				     (struct bpf_map_def *)&config_map);
+				     (struct bpf_map_def *)&config_map,
+				     (struct bpf_map_def *)data_heap_ptr);
 }
 
 __attribute__((section("kprobe/3"), used)) int
@@ -170,7 +187,8 @@ generic_kprobe_process_event3(void *ctx)
 	return generic_process_event(ctx, 3,
 				     (struct bpf_map_def *)&process_call_heap,
 				     (struct bpf_map_def *)&kprobe_calls,
-				     (struct bpf_map_def *)&config_map);
+				     (struct bpf_map_def *)&config_map,
+				     (struct bpf_map_def *)data_heap_ptr);
 }
 
 __attribute__((section("kprobe/4"), used)) int
@@ -179,7 +197,8 @@ generic_kprobe_process_event4(void *ctx)
 	return generic_process_event(ctx, 4,
 				     (struct bpf_map_def *)&process_call_heap,
 				     (struct bpf_map_def *)&kprobe_calls,
-				     (struct bpf_map_def *)&config_map);
+				     (struct bpf_map_def *)&config_map,
+				     (struct bpf_map_def *)data_heap_ptr);
 }
 
 __attribute__((section("kprobe/5"), used)) int
@@ -213,7 +232,6 @@ generic_kprobe_filter_arg1(void *ctx)
 	return filter_read_arg(ctx, 0, (struct bpf_map_def *)&process_call_heap,
 			       (struct bpf_map_def *)&filter_map,
 			       (struct bpf_map_def *)&kprobe_calls,
-			       (struct bpf_map_def *)&override_tasks,
 			       (struct bpf_map_def *)&config_map);
 }
 
@@ -223,7 +241,6 @@ generic_kprobe_filter_arg2(void *ctx)
 	return filter_read_arg(ctx, 1, (struct bpf_map_def *)&process_call_heap,
 			       (struct bpf_map_def *)&filter_map,
 			       (struct bpf_map_def *)&kprobe_calls,
-			       (struct bpf_map_def *)&override_tasks,
 			       (struct bpf_map_def *)&config_map);
 }
 
@@ -233,7 +250,6 @@ generic_kprobe_filter_arg3(void *ctx)
 	return filter_read_arg(ctx, 2, (struct bpf_map_def *)&process_call_heap,
 			       (struct bpf_map_def *)&filter_map,
 			       (struct bpf_map_def *)&kprobe_calls,
-			       (struct bpf_map_def *)&override_tasks,
 			       (struct bpf_map_def *)&config_map);
 }
 
@@ -243,7 +259,6 @@ generic_kprobe_filter_arg4(void *ctx)
 	return filter_read_arg(ctx, 3, (struct bpf_map_def *)&process_call_heap,
 			       (struct bpf_map_def *)&filter_map,
 			       (struct bpf_map_def *)&kprobe_calls,
-			       (struct bpf_map_def *)&override_tasks,
 			       (struct bpf_map_def *)&config_map);
 }
 
@@ -253,8 +268,22 @@ generic_kprobe_filter_arg5(void *ctx)
 	return filter_read_arg(ctx, 4, (struct bpf_map_def *)&process_call_heap,
 			       (struct bpf_map_def *)&filter_map,
 			       (struct bpf_map_def *)&kprobe_calls,
-			       (struct bpf_map_def *)&override_tasks,
 			       (struct bpf_map_def *)&config_map);
+}
+
+__attribute__((section("kprobe/11"), used)) int
+generic_kprobe_actions(void *ctx)
+{
+	return generic_actions(ctx, (struct bpf_map_def *)&process_call_heap,
+			       (struct bpf_map_def *)&filter_map,
+			       (struct bpf_map_def *)&kprobe_calls,
+			       (struct bpf_map_def *)&override_tasks);
+}
+
+__attribute__((section("kprobe/12"), used)) int
+generic_kprobe_output(void *ctx)
+{
+	return generic_output(ctx, (struct bpf_map_def *)&process_call_heap);
 }
 
 __attribute__((section("kprobe/override"), used)) int

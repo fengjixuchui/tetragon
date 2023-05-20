@@ -25,6 +25,8 @@ const (
 	ActionTypeCopyFd     = 5
 	ActionTypeGetUrl     = 6
 	ActionTypeDnsLookup  = 7
+	ActionTypeNoPost     = 8
+	ActionTypeSignal     = 9
 )
 
 var actionTypeTable = map[string]uint32{
@@ -36,6 +38,8 @@ var actionTypeTable = map[string]uint32{
 	"copyfd":     ActionTypeCopyFd,
 	"geturl":     ActionTypeGetUrl,
 	"dnslookup":  ActionTypeDnsLookup,
+	"nopost":     ActionTypeNoPost,
+	"signal":     ActionTypeSignal,
 }
 
 var actionTypeStringTable = map[uint32]string{
@@ -47,6 +51,8 @@ var actionTypeStringTable = map[uint32]string{
 	ActionTypeCopyFd:     "copyfd",
 	ActionTypeGetUrl:     "geturl",
 	ActionTypeDnsLookup:  "dnslookup",
+	ActionTypeNoPost:     "nopost",
+	ActionTypeSignal:     "signal",
 }
 
 // Action argument table entry (for URL and FQDN arguments)
@@ -136,6 +142,7 @@ const (
 	argTypeS32 = 12
 	argTypeU32 = 13
 
+	argTypePath = 15
 	argTypeFile = 16
 	argTypeFd   = 17
 
@@ -155,6 +162,7 @@ var argTypeTable = map[string]uint32{
 	"skb":        argTypeSkb,
 	"string":     argTypeString,
 	"fd":         argTypeFd,
+	"path":       argTypePath,
 	"file":       argTypeFile,
 	"sock":       argTypeSock,
 	"url":        argTypeUrl,
@@ -174,6 +182,7 @@ var argTypeStringTable = map[uint32]string{
 	argTypeString:    "string",
 	argTypeFd:        "fd",
 	argTypeFile:      "file",
+	argTypePath:      "path",
 	argTypeSock:      "sock",
 	argTypeUrl:       "url",
 	argTypeFqdn:      "fqdn",
@@ -193,6 +202,8 @@ const (
 	// Map ops
 	SelectorInMap    = 10
 	SelectorNotInMap = 11
+
+	SelectorOpMASK = 12
 )
 
 func SelectorOp(op string) (uint32, error) {
@@ -217,6 +228,8 @@ func SelectorOp(op string) (uint32, error) {
 		return SelectorInMap, nil
 	case "NotInMap":
 		return SelectorNotInMap, nil
+	case "mask", "Mask":
+		return SelectorOpMASK, nil
 	}
 
 	return 0, fmt.Errorf("Unknown op '%s'", op)
@@ -303,13 +316,13 @@ func writeMatchValuesInMap(k *KernelSelectorState, values []string, ty uint32) e
 		case argTypeS64, argTypeInt:
 			i, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			binary.LittleEndian.PutUint64(val[:], uint64(i))
 		case argTypeU64:
 			i, err := strconv.ParseUint(v, 10, 64)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			binary.LittleEndian.PutUint64(val[:], uint64(i))
 		default:
@@ -323,10 +336,21 @@ func writeMatchValuesInMap(k *KernelSelectorState, values []string, ty uint32) e
 	return nil
 }
 
+func getBase(v string) int {
+	if strings.HasPrefix(v, "0x") {
+		return 16
+	}
+	if strings.HasPrefix(v, "0") {
+		return 8
+	}
+	return 10
+}
+
 func writeMatchValues(k *KernelSelectorState, values []string, ty uint32) error {
 	for _, v := range values {
+		base := getBase(v)
 		switch ty {
-		case argTypeFd, argTypeFile:
+		case argTypeFd, argTypeFile, argTypePath:
 			value, size := ArgSelectorValue(v)
 			WriteSelectorUint32(k, size)
 			WriteSelectorByteArray(k, value, size)
@@ -335,27 +359,27 @@ func writeMatchValues(k *KernelSelectorState, values []string, ty uint32) error 
 			WriteSelectorUint32(k, size)
 			WriteSelectorByteArray(k, value, size)
 		case argTypeS32, argTypeInt, argTypeSizet:
-			i, err := strconv.ParseInt(v, 10, 32)
+			i, err := strconv.ParseInt(v, base, 32)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			WriteSelectorInt32(k, int32(i))
 		case argTypeU32:
-			i, err := strconv.ParseUint(v, 10, 32)
+			i, err := strconv.ParseUint(v, base, 32)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			WriteSelectorUint32(k, uint32(i))
 		case argTypeS64:
-			i, err := strconv.ParseInt(v, 10, 64)
+			i, err := strconv.ParseInt(v, base, 64)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			WriteSelectorInt64(k, int64(i))
 		case argTypeU64:
-			i, err := strconv.ParseUint(v, 10, 64)
+			i, err := strconv.ParseUint(v, base, 64)
 			if err != nil {
-				return fmt.Errorf("MatchArgs value %s invalid: %x", v, err)
+				return fmt.Errorf("MatchArgs value %s invalid: %w", v, err)
 			}
 			WriteSelectorUint64(k, uint64(i))
 		case argTypeSock, argTypeSkb, argTypeCharIovec:
@@ -395,9 +419,24 @@ func ParseMatchArg(k *KernelSelectorState, arg *v1alpha1.ArgSelector, sig []v1al
 	WriteSelectorLength(k, moff)
 	return nil
 }
+
 func ParseMatchArgs(k *KernelSelectorState, args []v1alpha1.ArgSelector, sig []v1alpha1.KProbeArg) error {
+	max_args := 1
+	if kernels.EnableLargeProgs() {
+		max_args = 5 // we support up 5 argument filters under matchArgs with kernels >= 5.3, otherwise 1 argument
+	}
+	if len(args) > max_args {
+		return fmt.Errorf("parseMatchArgs: supports up to %d filters (%d provided)", max_args, len(args))
+	}
+	actionOffset := GetCurrentOffset(k)
 	loff := AdvanceSelectorLength(k)
-	for _, a := range args {
+	argOff := make([]uint32, 5)
+	for i := 0; i < 5; i++ {
+		argOff[i] = AdvanceSelectorLength(k)
+		WriteSelectorOffsetUint32(k, argOff[i], 0)
+	}
+	for i, a := range args {
+		WriteSelectorOffsetUint32(k, argOff[i], GetCurrentOffset(k)-actionOffset)
 		if err := ParseMatchArg(k, &a, sig); err != nil {
 			return err
 		}
@@ -430,11 +469,16 @@ func ParseMatchAction(k *KernelSelectorState, action *v1alpha1.ActionSelector, a
 		}
 		actionArgTable.AddEntry(&actionArg)
 		WriteSelectorUint32(k, uint32(actionArg.tableId.ID))
+	case ActionTypeSignal:
+		WriteSelectorUint32(k, action.ArgSig)
 	}
 	return nil
 }
 
 func ParseMatchActions(k *KernelSelectorState, actions []v1alpha1.ActionSelector, actionArgTable *idtable.Table) error {
+	if len(actions) > 3 {
+		return fmt.Errorf("only %d actions are support for selector (current number of values is %d)", 3, len(actions))
+	}
 	loff := AdvanceSelectorLength(k)
 	for _, a := range actions {
 		if err := ParseMatchAction(k, &a, actionArgTable); err != nil {
@@ -442,8 +486,7 @@ func ParseMatchActions(k *KernelSelectorState, actions []v1alpha1.ActionSelector
 		}
 	}
 
-	// Zero length value is also default ActionTypePost action
-	// that bpf program reads when no other action is specified.
+	// No action (size value 4) defaults to post action.
 	WriteSelectorLength(k, loff)
 	return nil
 }
@@ -632,7 +675,7 @@ func ParseMatchCapabilityChanges(k *KernelSelectorState, actions []v1alpha1.Capa
 	return nil
 }
 
-func ParseMatchBinary(k *KernelSelectorState, b *v1alpha1.BinarySelector) error {
+func ParseMatchBinary(k *KernelSelectorState, b *v1alpha1.BinarySelector, selIdx int) error {
 	op, err := SelectorOp(b.Operator)
 	if err != nil {
 		return fmt.Errorf("matchBinary error: %w", err)
@@ -640,22 +683,22 @@ func ParseMatchBinary(k *KernelSelectorState, b *v1alpha1.BinarySelector) error 
 	if op != SelectorOpIn && op != SelectorOpNotIn {
 		return fmt.Errorf("matchBinary error: Only In and NotIn operators are supported")
 	}
-	k.SetBinaryOp(op)
+	k.SetBinaryOp(selIdx, op)
 	for _, s := range b.Values {
 		if len(s) > 255 {
 			return fmt.Errorf("matchBinary error: Binary names > 255 chars do not supported")
 		}
-		k.AddBinaryName(s)
+		k.AddBinaryName(selIdx, s)
 	}
 	return nil
 }
 
-func ParseMatchBinaries(k *KernelSelectorState, binarys []v1alpha1.BinarySelector) error {
+func ParseMatchBinaries(k *KernelSelectorState, binarys []v1alpha1.BinarySelector, selIdx int) error {
 	if len(binarys) > 1 {
 		return fmt.Errorf("Only support single binary selector")
 	}
 	for _, s := range binarys {
-		if err := ParseMatchBinary(k, &s); err != nil {
+		if err := ParseMatchBinary(k, &s, selIdx); err != nil {
 			return err
 		}
 	}
@@ -665,6 +708,7 @@ func ParseMatchBinaries(k *KernelSelectorState, binarys []v1alpha1.BinarySelecto
 func parseSelector(
 	k *KernelSelectorState,
 	selectors *v1alpha1.KProbeSelector,
+	selIdx int,
 	args []v1alpha1.KProbeArg,
 	actionArgTable *idtable.Table) error {
 	if err := ParseMatchPids(k, selectors.MatchPIDs); err != nil {
@@ -682,7 +726,7 @@ func parseSelector(
 	if err := ParseMatchCapabilityChanges(k, selectors.MatchCapabilityChanges); err != nil {
 		return fmt.Errorf("parseMatchCapabilityChanges error: %w", err)
 	}
-	if err := ParseMatchBinaries(k, selectors.MatchBinaries); err != nil {
+	if err := ParseMatchBinaries(k, selectors.MatchBinaries, selIdx); err != nil {
 		return fmt.Errorf("parseMatchBinaries error: %w", err)
 	}
 	if err := ParseMatchArgs(k, selectors.MatchArgs, args); err != nil {
@@ -739,7 +783,7 @@ func InitKernelSelectors(selectors []v1alpha1.KProbeSelector, args []v1alpha1.KP
 
 func InitKernelSelectorState(selectors []v1alpha1.KProbeSelector, args []v1alpha1.KProbeArg,
 	actionArgTable *idtable.Table) (*KernelSelectorState, error) {
-	kernelSelectors := &KernelSelectorState{}
+	kernelSelectors := NewKernelSelectorState()
 
 	WriteSelectorUint32(kernelSelectors, uint32(len(selectors)))
 	soff := make([]uint32, len(selectors))
@@ -749,7 +793,7 @@ func InitKernelSelectorState(selectors []v1alpha1.KProbeSelector, args []v1alpha
 	for i, s := range selectors {
 		WriteSelectorLength(kernelSelectors, soff[i])
 		loff := AdvanceSelectorLength(kernelSelectors)
-		if err := parseSelector(kernelSelectors, &s, args, actionArgTable); err != nil {
+		if err := parseSelector(kernelSelectors, &s, i, args, actionArgTable); err != nil {
 			return nil, err
 		}
 		WriteSelectorLength(kernelSelectors, loff)
@@ -765,6 +809,26 @@ func HasOverride(spec *v1alpha1.KProbeSpec) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func HasEarlyBinaryFilter(selectors []v1alpha1.KProbeSelector) bool {
+	if len(selectors) == 0 {
+		return false
+	}
+	for _, s := range selectors {
+		if len(s.MatchPIDs) > 0 ||
+			len(s.MatchNamespaces) > 0 ||
+			len(s.MatchCapabilities) > 0 ||
+			len(s.MatchNamespaceChanges) > 0 ||
+			len(s.MatchCapabilityChanges) > 0 ||
+			len(s.MatchArgs) > 0 {
+			return false
+		}
+	}
+	if len(selectors) == 1 && len(selectors[0].MatchBinaries) > 0 {
+		return true
 	}
 	return false
 }

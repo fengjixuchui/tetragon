@@ -23,15 +23,10 @@ import (
 
 	"github.com/cilium/tetragon/pkg/defaults"
 	"github.com/cilium/tetragon/pkg/logger"
+	"go.uber.org/multierr"
 
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
-)
-
-const (
-	// initInfoFile is the file location for the info file.
-	// After initialization, initInfoFname will contain a json representation of InitInfo
-	initInfoFname = defaults.DefaultRunDir + "tetragon-info.json"
 )
 
 // InitInfo contains information about how Tetragon was initialized.
@@ -41,16 +36,17 @@ type InitInfo struct {
 	BtfFname    string `json:"btf_fname"`
 	ServerAddr  string `json:"server_address"`
 	MetricsAddr string `json:"metrics_address"`
+	GopsAddr    string `json:"gops_address"`
 }
 
 // LoadInitInfo returns the InitInfo by reading the info file from its default location
 func LoadInitInfo() (*InitInfo, error) {
-	return doLoadInitInfo(initInfoFname)
+	return doLoadInitInfo(defaults.InitInfoFile)
 }
 
 // SaveInitInfo saves InitInfo to the info file
 func SaveInitInfo(info *InitInfo) error {
-	return doSaveInitInfo(initInfoFname, info)
+	return doSaveInitInfo(defaults.InitInfoFile, info)
 }
 
 func doLoadInitInfo(fname string) (*InitInfo, error) {
@@ -216,6 +212,7 @@ func doBugtool(info *InitInfo, outFname string) error {
 	si.execCmd(tarWriter, "dmesg.out", "dmesg")
 	si.addTcInfo(tarWriter)
 	si.addBpftoolInfo(tarWriter)
+	si.addGopsInfo(tarWriter)
 	return nil
 }
 
@@ -259,6 +256,11 @@ func (s *bugtoolInfo) addLibFiles(tarWriter *tar.Writer) error {
 			mode := info.Mode()
 			if !(mode.IsRegular() || mode.IsDir()) {
 				s.multiLog.WithField("path", path).Warn("not a regular file, ignoring")
+				return nil
+			}
+
+			if !strings.HasSuffix(info.Name(), ".o") {
+				s.multiLog.WithField("path", path).Warn("not an object file, ignoring")
 				return nil
 			}
 
@@ -401,16 +403,15 @@ func (s *bugtoolInfo) execCmd(tarWriter *tar.Writer, dstFname string, cmdName st
 	// If, however, we use this with programs (not currently the case) that
 	// have outputs too large for memory, this would be problematic because
 	// it will lead to swapping or OOM.
-	buff := new(bytes.Buffer)
-	buff.WriteString("-------------------- stdout starts here --------------------\n")
-	if _, err = buff.ReadFrom(stdout); err != nil {
+	outbuff := new(bytes.Buffer)
+	if _, err = outbuff.ReadFrom(stdout); err != nil {
 		s.multiLog.WithField("cmd", cmd).WithError(err).Warnf("error reading stdout")
 	}
-	buff.WriteString("-------------------- stderr starts here --------------------\n")
-	if _, err = buff.ReadFrom(stderr); err != nil {
+
+	errbuff := new(bytes.Buffer)
+	if _, err = errbuff.ReadFrom(stderr); err != nil {
 		s.multiLog.WithField("cmd", cmd).WithError(err).Warnf("error reading stderr")
 	}
-	buff.WriteString("------------------------------------------------------------\n")
 
 	errStr := "0"
 	err = cmd.Wait()
@@ -418,7 +419,13 @@ func (s *bugtoolInfo) execCmd(tarWriter *tar.Writer, dstFname string, cmdName st
 		errStr = err.Error()
 	}
 	s.multiLog.WithField("cmd", cmd).WithField("ret", errStr).WithField("dstFname", dstFname).Info("executed command")
-	return s.tarAddBuff(tarWriter, dstFname, buff)
+
+	ret := s.tarAddBuff(tarWriter, dstFname, outbuff)
+	if errbuff.Len() > 0 {
+		errstderr := s.tarAddBuff(tarWriter, dstFname+".err", errbuff)
+		ret = multierr.Append(ret, errstderr)
+	}
+	return ret
 }
 
 // addTcInfo adds information about tc filters on the devices
@@ -444,7 +451,16 @@ func (s *bugtoolInfo) addTcInfo(tarWriter *tar.Writer) error {
 
 // addBpftoolInfo adds information about loaded eBPF maps and programs
 func (s *bugtoolInfo) addBpftoolInfo(tarWriter *tar.Writer) {
-	s.execCmd(tarWriter, "maps.dump", "bpftool", "map", "show")
-	s.execCmd(tarWriter, "progs.dump", "bpftool", "prog", "show")
-	s.execCmd(tarWriter, "cgroups.dump", "bpftool", "cgroup", "tree")
+	s.execCmd(tarWriter, "bpftool-maps.json", "bpftool", "map", "show", "-j")
+	s.execCmd(tarWriter, "bpftool-progs.json", "bpftool", "prog", "show", "-j")
+	s.execCmd(tarWriter, "bpftool-cgroups.json", "bpftool", "cgroup", "tree", "-j")
+}
+
+func (s *bugtoolInfo) addGopsInfo(tarWriter *tar.Writer) {
+	if s.info.GopsAddr == "" {
+		return
+	}
+	s.execCmd(tarWriter, "gops.stack", "gops", "stack", s.info.GopsAddr)
+	s.execCmd(tarWriter, "gpos.stats", "gops", "stats", s.info.GopsAddr)
+	s.execCmd(tarWriter, "gops.memstats", "gops", "memstats", s.info.GopsAddr)
 }

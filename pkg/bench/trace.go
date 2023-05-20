@@ -12,7 +12,7 @@ import (
 )
 
 type TraceBench interface {
-	ConfigFilename(ctx context.Context, args *Arguments) string
+	ConfigFilename(args *Arguments) string
 	Run(ctx context.Context, args *Arguments, summary *Summary) error
 }
 
@@ -61,7 +61,7 @@ func RunTraceBench(args *Arguments) (summary *Summary) {
 		panic("unknown benchmark")
 	}
 
-	configFile := bench.ConfigFilename(ctx, args)
+	configFile := bench.ConfigFilename(args)
 
 	if args.Trace != "custom" {
 		defer os.Remove(configFile)

@@ -93,9 +93,10 @@ func TestMain(m *testing.M) {
 }
 
 func TestLabelsDemoApp(t *testing.T) {
-	// Grab the minimum kernel version in all cluster nodes and define an RPC checker with it
-	kversion := helpers.GetMinKernelVersion(t, runner.Environment)
-	labelsChecker := labelsEventChecker(kversion).WithEventLimit(5000).WithTimeLimit(5 * time.Minute)
+	// Must be called at the beginning of every test
+	runner.SetupExport(t)
+
+	labelsChecker := labelsEventChecker().WithEventLimit(5000).WithTimeLimit(5 * time.Minute)
 
 	// This starts labelsChecker and uses it to run event checks.
 	runEventChecker := features.New("Run Event Checks").
@@ -117,7 +118,7 @@ func TestLabelsDemoApp(t *testing.T) {
 	runner.Test(t, uninstall)
 }
 
-func labelsEventChecker(kernelVersion string) *checker.RPCChecker {
+func labelsEventChecker() *checker.RPCChecker {
 	labelsEventChecker := ec.NewUnorderedEventChecker(
 		ec.NewProcessExecChecker("coreapi").WithProcess(ec.NewProcessChecker().WithPod(ec.NewPodChecker().WithPodLabels(map[string]sm.StringMatcher{
 			"app":               *sm.Full("coreapi"),

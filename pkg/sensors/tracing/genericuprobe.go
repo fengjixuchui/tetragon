@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"reflect"
 	"sync/atomic"
 
 	"github.com/cilium/ebpf"
@@ -22,10 +21,12 @@ import (
 	"github.com/cilium/tetragon/pkg/logger"
 	"github.com/cilium/tetragon/pkg/observer"
 	"github.com/cilium/tetragon/pkg/option"
+	"github.com/cilium/tetragon/pkg/policyfilter"
 	"github.com/cilium/tetragon/pkg/selectors"
 	"github.com/cilium/tetragon/pkg/sensors"
 	"github.com/cilium/tetragon/pkg/sensors/base"
 	"github.com/cilium/tetragon/pkg/sensors/program"
+	"github.com/cilium/tetragon/pkg/tracingpolicy"
 )
 
 type observerUprobeSensor struct {
@@ -43,6 +44,8 @@ type genericUprobe struct {
 	path          string
 	symbol        string
 	selectors     *selectors.KernelSelectorState
+	// policyName is the name of the policy that this uprobe belongs to
+	policyName string
 }
 
 func (g *genericUprobe) SetID(id idtable.EntryID) {
@@ -54,7 +57,7 @@ func init() {
 		name: "uprobe sensor",
 	}
 	sensors.RegisterProbeType("generic_uprobe", uprobe)
-	sensors.RegisterSpecHandlerAtInit(uprobe.name, uprobe)
+	sensors.RegisterPolicyHandlerAtInit(uprobe.name, uprobe)
 	observer.RegisterEventHandlerAtInit(ops.MSG_OP_GENERIC_UPROBE, handleGenericUprobe)
 }
 
@@ -124,18 +127,8 @@ func (k *observerUprobeSensor) LoadProbe(args sensors.LoadProbeArgs) error {
 		{
 			Index: 0,
 			Name:  "sel_names_map",
-			Load: func(m *ebpf.Map, index uint32) error {
-				// add a special entry (key == UINT32_MAX) that has as a value the number of matchBinaries entry
-				// if this is zero we don't have any matchBinaries selectors
-				if err := m.Update(uint32(0xffffffff), uprobeEntry.selectors.GetBinaryOp(), ebpf.UpdateAny); err != nil {
-					return err
-				}
-				for idx, val := range uprobeEntry.selectors.GetBinSelNamesMap() {
-					if err := m.Update(idx, val, ebpf.UpdateAny); err != nil {
-						return err
-					}
-				}
-				return nil
+			Load: func(outerMap *ebpf.Map, index uint32) error {
+				return populateBinariesMaps(uprobeEntry.selectors, uprobeEntry.pinPathPrefix, outerMap)
 			},
 		},
 	}
@@ -158,7 +151,8 @@ func (k *observerUprobeSensor) LoadProbe(args sensors.LoadProbeArgs) error {
 		writeBinaryMap(m, i, path)
 	}
 
-	logger.GetLogger().Infof("Loaded generic uprobe program: %s -> %s [%s]", args.Load.Name, uprobeEntry.path, uprobeEntry.symbol)
+	logger.GetLogger().WithField("flags", flagsString(uprobeEntry.config.Flags)).
+		Infof("Loaded generic uprobe program: %s -> %s [%s]", args.Load.Name, uprobeEntry.path, uprobeEntry.symbol)
 	return nil
 }
 
@@ -177,7 +171,11 @@ func isValidUprobeSelectors(selectors []v1alpha1.KProbeSelector) error {
 	return nil
 }
 
-func createGenericUprobeSensor(name string, uprobes []v1alpha1.UProbeSpec) (*sensors.Sensor, error) {
+func createGenericUprobeSensor(
+	name string,
+	uprobes []v1alpha1.UProbeSpec,
+	policyName string,
+) (*sensors.Sensor, error) {
 	var progs []*program.Program
 	var maps []*program.Map
 
@@ -207,11 +205,12 @@ func createGenericUprobeSensor(name string, uprobes []v1alpha1.UProbeSpec) (*sen
 		}
 
 		uprobeEntry := &genericUprobe{
-			tableId:   idtable.UninitializedEntryID,
-			config:    config,
-			path:      spec.Path,
-			symbol:    spec.Symbol,
-			selectors: uprobeSelectorState,
+			tableId:    idtable.UninitializedEntryID,
+			config:     config,
+			path:       spec.Path,
+			symbol:     spec.Symbol,
+			selectors:  uprobeSelectorState,
+			policyName: policyName,
 		}
 
 		uprobeTable.AddEntry(uprobeEntry)
@@ -219,6 +218,10 @@ func createGenericUprobeSensor(name string, uprobes []v1alpha1.UProbeSpec) (*sen
 
 		uprobeEntry.pinPathPrefix = sensors.PathJoin(sensorPath, fmt.Sprintf("%d", id))
 		config.FuncId = uint32(id)
+
+		if selectors.HasEarlyBinaryFilter(spec.Selectors) {
+			config.Flags |= flagsEarlyFilter
+		}
 
 		pinPath := uprobeEntry.pinPathPrefix
 		pinProg := sensors.PathJoin(pinPath, "prog")
@@ -253,18 +256,21 @@ func createGenericUprobeSensor(name string, uprobes []v1alpha1.UProbeSpec) (*sen
 	}, nil
 }
 
-func (k *observerUprobeSensor) SpecHandler(raw interface{}) (*sensors.Sensor, error) {
-	spec, ok := raw.(*v1alpha1.TracingPolicySpec)
-	if !ok {
-		s, ok := reflect.Indirect(reflect.ValueOf(raw)).FieldByName("TracingPolicySpec").Interface().(v1alpha1.TracingPolicySpec)
-		if !ok {
-			return nil, nil
-		}
-		spec = &s
+func (k *observerUprobeSensor) PolicyHandler(
+	p tracingpolicy.TracingPolicy,
+	fid policyfilter.PolicyID,
+) (*sensors.Sensor, error) {
+	spec := p.TpSpec()
+
+	if len(spec.UProbes) == 0 {
+		return nil, nil
 	}
+
+	if fid != policyfilter.NoFilterID {
+		return nil, fmt.Errorf("uprobe sensor does not implement policy filtering")
+	}
+
 	name := fmt.Sprintf("gup-sensor-%d", atomic.AddUint64(&sensorCounter, 1))
-	if len(spec.UProbes) > 0 {
-		return createGenericUprobeSensor(name, spec.UProbes)
-	}
-	return nil, nil
+	policyName := p.TpName()
+	return createGenericUprobeSensor(name, spec.UProbes, policyName)
 }

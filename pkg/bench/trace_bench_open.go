@@ -55,7 +55,7 @@ func (src traceBenchOpen) benchWorker(ctx context.Context) {
 	}
 }
 
-func (src traceBenchOpen) Run(ctx context.Context, args *Arguments, summary *Summary) error {
+func (src traceBenchOpen) Run(ctx context.Context, _ *Arguments, _ *Summary) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -74,7 +74,7 @@ func (src traceBenchOpen) Run(ctx context.Context, args *Arguments, summary *Sum
 	return nil
 }
 
-func (src traceBenchOpen) ConfigFilename(ctx context.Context, args *Arguments) string {
+func (src traceBenchOpen) ConfigFilename(_ *Arguments) string {
 	tmpl := `
 apiVersion: cilium.io/v1alpha1
 metadata:

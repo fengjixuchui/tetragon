@@ -12,7 +12,7 @@ import (
 type traceBenchCustom struct {
 }
 
-func (src traceBenchCustom) Run(ctx context.Context, args *Arguments, summary *Summary) error {
+func (src traceBenchCustom) Run(_ context.Context, args *Arguments, _ *Summary) error {
 	fmt.Printf("running %v\n", args.CmdArgs)
 
 	// run the benchmark
@@ -30,7 +30,7 @@ func (src traceBenchCustom) Run(ctx context.Context, args *Arguments, summary *S
 	return err
 }
 
-func (src traceBenchCustom) ConfigFilename(ctx context.Context, args *Arguments) string {
+func (src traceBenchCustom) ConfigFilename(args *Arguments) string {
 	return args.Crd
 }
 

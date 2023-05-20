@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"net"
 
+	pb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/tetragon/pkg/oldhubble/api/v1"
-	pb "github.com/cilium/tetragon/pkg/oldhubbleapi/v1/flow"
 )
 
 func sourceIP(ev *v1.Event) string {
@@ -59,7 +59,7 @@ func filterByIPs(ips []string, getIP func(*v1.Event) string) (FilterFunc, error)
 type IPFilter struct{}
 
 // OnBuildFilter builds an IP address filter
-func (f *IPFilter) OnBuildFilter(ctx context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
+func (f *IPFilter) OnBuildFilter(_ context.Context, ff *pb.FlowFilter) ([]FilterFunc, error) {
 	var fs []FilterFunc
 
 	if ff.GetSourceIp() != nil {

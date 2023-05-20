@@ -30,11 +30,16 @@ type customInstall struct {
 }
 
 func RawAttach(targetFD int) AttachFunc {
+	return RawAttachWithFlags(targetFD, 0)
+}
+
+func RawAttachWithFlags(targetFD int, flags uint32) AttachFunc {
 	return func(prog *ebpf.Program, spec *ebpf.ProgramSpec) (unloader.Unloader, error) {
 		err := link.RawAttachProgram(link.RawAttachProgramOptions{
 			Target:  targetFD,
 			Program: prog,
 			Attach:  spec.AttachType,
+			Flags:   flags,
 		})
 		if err != nil {
 			prog.Close()
@@ -154,12 +159,52 @@ func UprobeAttach(load *Program) AttachFunc {
 	}
 }
 
-func NoAttach(load *Program) AttachFunc {
+func NoAttach() AttachFunc {
 	return func(prog *ebpf.Program, spec *ebpf.ProgramSpec) (unloader.Unloader, error) {
 		return unloader.ChainUnloader{
 			unloader.PinUnloader{
 				Prog: prog,
 			},
+		}, nil
+	}
+}
+
+func TracingAttach() AttachFunc {
+	return func(prog *ebpf.Program, spec *ebpf.ProgramSpec) (unloader.Unloader, error) {
+		linkFn := func() (link.Link, error) {
+			return link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
+		}
+		lnk, err := linkFn()
+		if err != nil {
+			return nil, fmt.Errorf("attaching '%s' failed: %w", spec.Name, err)
+		}
+		return &unloader.RelinkUnloader{
+			UnloadProg: unloader.PinUnloader{Prog: prog}.Unload,
+			IsLinked:   true,
+			Link:       lnk,
+			RelinkFn:   linkFn,
+		}, nil
+	}
+}
+
+func LSMAttach() AttachFunc {
+	return func(prog *ebpf.Program, spec *ebpf.ProgramSpec) (unloader.Unloader, error) {
+		linkFn := func() (link.Link, error) {
+			return link.AttachLSM(link.LSMOptions{
+				Program: prog,
+			})
+		}
+		lnk, err := linkFn()
+		if err != nil {
+			return nil, fmt.Errorf("attaching '%s' failed: %w", spec.Name, err)
+		}
+		return &unloader.RelinkUnloader{
+			UnloadProg: unloader.PinUnloader{Prog: prog}.Unload,
+			IsLinked:   true,
+			Link:       lnk,
+			RelinkFn:   linkFn,
 		}, nil
 	}
 }
@@ -235,12 +280,20 @@ func LoadUprobeProgram(bpfDir, mapDir string, load *Program, verbose int) error 
 }
 
 func LoadTailCallProgram(bpfDir, mapDir string, load *Program, verbose int) error {
-	return loadProgram(bpfDir, []string{mapDir}, load, NoAttach(load), nil, verbose)
+	return loadProgram(bpfDir, []string{mapDir}, load, NoAttach(), nil, verbose)
 }
 
 func LoadMultiKprobeProgram(bpfDir, mapDir string, load *Program, verbose int) error {
 	ci := &customInstall{fmt.Sprintf("%s-kp_calls", load.PinPath), "kprobe"}
 	return loadProgram(bpfDir, []string{mapDir}, load, MultiKprobeAttach(load), ci, verbose)
+}
+
+func LoadTracingProgram(bpfDir, mapDir string, load *Program, verbose int) error {
+	return loadProgram(bpfDir, []string{mapDir}, load, TracingAttach(), nil, verbose)
+}
+
+func LoadLSMProgram(bpfDir, mapDir string, load *Program, verbose int) error {
+	return loadProgram(bpfDir, []string{mapDir}, load, LSMAttach(), nil, verbose)
 }
 
 func slimVerifierError(errStr string) string {
@@ -293,7 +346,7 @@ func installTailCalls(mapDir string, spec *ebpf.CollectionSpec, coll *ebpf.Colle
 		}
 		defer tailCallsMap.Close()
 
-		for i := 0; i < 11; i++ {
+		for i := 0; i < 13; i++ {
 			secName := fmt.Sprintf("%s/%d", secPrefix, i)
 			if progName, ok := secToProgName[secName]; ok {
 				if prog, ok := coll.Programs[progName]; ok {
@@ -346,6 +399,12 @@ func doLoadProgram(
 	spec, err := ebpf.LoadCollectionSpec(load.Name)
 	if err != nil {
 		return nil, fmt.Errorf("loading collection spec failed: %w", err)
+	}
+
+	for _, ms := range spec.Maps {
+		if max, ok := load.MaxEntriesMap[ms.Name]; ok {
+			ms.MaxEntries = max
+		}
 	}
 
 	// Find all the maps referenced by the program, so we'll rewrite only

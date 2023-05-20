@@ -127,7 +127,12 @@ func (pc *Cache) Purge() {
 func NewCache(
 	processCacheSize int,
 ) (*Cache, error) {
-	lruCache, err := lru.New[string, *ProcessInternal](processCacheSize)
+	lruCache, err := lru.NewWithEvict(
+		processCacheSize,
+		func(_ string, _ *ProcessInternal) {
+			mapmetrics.MapDropInc("processLru")
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,9 @@ func (pc *Cache) get(processID string) (*ProcessInternal, error) {
 	return process, nil
 }
 
-func (pc *Cache) Add(process *ProcessInternal) bool {
+// Add a ProcessInternal structure to the cache. Must be called only from
+// clone or execve events
+func (pc *Cache) add(process *ProcessInternal) bool {
 	evicted := pc.cache.Add(process.process.ExecId, process)
 	if evicted {
 		errormetrics.ErrorTotalInc(errormetrics.ProcessCacheEvicted)

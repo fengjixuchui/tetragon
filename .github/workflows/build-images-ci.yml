@@ -30,7 +30,7 @@ jobs:
             dockerfile: ./Dockerfile
 
           - name: tetragon-operator
-            dockerfile: ./operator.Dockerfile
+            dockerfile: ./Dockerfile.operator
 
     steps:
       # https://github.com/docker/setup-qemu-action
@@ -41,7 +41,7 @@ jobs:
 
       # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f03ac48505955848960e80bbb68046aa35c7b9e7
+        uses: docker/setup-buildx-action@4b4e9c3e2d4531116a6f8ba8e71fc6e2cb6e6c8c
 
       - name: Login to quay.io for CI
         uses: docker/login-action@f4ef78c080cd8ba55a85445d5b36e214a81df20a
@@ -60,7 +60,7 @@ jobs:
           fi
 
       - name: Checkout Source Code
-        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab
         with:
           persist-credentials: false
           ref: ${{ steps.tag.outputs.tag }}

@@ -63,9 +63,9 @@ type DummyNotifier[EXEC notify.Message, EXIT notify.Message] struct {
 	t *testing.T
 }
 
-func (n DummyNotifier[EXEC, EXIT]) AddListener(listener server.Listener) {}
+func (n DummyNotifier[EXEC, EXIT]) AddListener(_ server.Listener) {}
 
-func (n DummyNotifier[EXEC, EXIT]) RemoveListener(listener server.Listener) {}
+func (n DummyNotifier[EXEC, EXIT]) RemoveListener(_ server.Listener) {}
 
 func (n DummyNotifier[EXEC, EXIT]) NotifyListener(original interface{}, processed *tetragon.GetEventsResponse) {
 	switch v := original.(type) {
@@ -206,7 +206,7 @@ func CreateEvents[EXEC notify.Message, EXIT notify.Message](Pid uint32, Ktime ui
 		},
 		Info: tetragonAPI.MsgExitInfo{
 			Code: 0,
-			Pad1: 0,
+			Tid:  Pid,
 		},
 	}
 
@@ -254,7 +254,7 @@ func CreateCloneEvents[CLONE notify.Message, EXIT notify.Message](Pid uint32, Kt
 		},
 		Info: tetragonAPI.MsgExitInfo{
 			Code: 0,
-			Pad1: 0,
+			Tid:  Pid,
 		},
 	}
 
@@ -272,7 +272,7 @@ func InitEnv[EXEC notify.Message, EXIT notify.Message](t *testing.T, cancelWg *s
 		t.Fatalf("failed to call cilium.InitCiliumState %s", err)
 	}
 
-	if err := process.InitCache(ctx, watcher, false, 65536); err != nil {
+	if err := process.InitCache(watcher, 65536); err != nil {
 		t.Fatalf("failed to call process.InitCache %s", err)
 	}
 
